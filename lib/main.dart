@@ -1,122 +1,1081 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 
 void main() {
-  runApp(const MyApp());
+  runApp(const VideoEnhancerApp());
 }
 
-class MyApp extends StatelessWidget {
-  const MyApp({super.key});
+class VideoEnhancerApp extends StatelessWidget {
+  const VideoEnhancerApp({super.key});
 
-  // This widget is the root of your application.
   @override
   Widget build(BuildContext context) {
+    final seed = const Color(0xFF1F7AE0);
     return MaterialApp(
-      title: 'Flutter Demo',
+      debugShowCheckedModeBanner: false,
+      title: 'Video Enhancer',
       theme: ThemeData(
-        // This is the theme of your application.
-        //
-        // TRY THIS: Try running your application with "flutter run". You'll see
-        // the application has a purple toolbar. Then, without quitting the app,
-        // try changing the seedColor in the colorScheme below to Colors.green
-        // and then invoke "hot reload" (save your changes or press the "hot
-        // reload" button in a Flutter-supported IDE, or press "r" if you used
-        // the command line to start the app).
-        //
-        // Notice that the counter didn't reset back to zero; the application
-        // state is not lost during the reload. To reset the state, use hot
-        // restart instead.
-        //
-        // This works for code too, not just values: Most code changes can be
-        // tested with just a hot reload.
-        colorScheme: .fromSeed(seedColor: Colors.deepPurple),
+        useMaterial3: true,
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: seed,
+          brightness: Brightness.dark,
+        ),
+        scaffoldBackgroundColor: const Color(0xFF09111F),
+        snackBarTheme: const SnackBarThemeData(
+          behavior: SnackBarBehavior.floating,
+        ),
+        cardTheme: CardThemeData(
+          color: const Color(0xFF121D31),
+          elevation: 0,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(28),
+            side: const BorderSide(color: Color(0xFF22324D)),
+          ),
+        ),
       ),
-      home: const MyHomePage(title: 'Flutter Demo Home Page'),
+      home: const VideoEnhancerHomePage(),
     );
   }
 }
 
-class MyHomePage extends StatefulWidget {
-  const MyHomePage({super.key, required this.title});
-
-  // This widget is the home page of your application. It is stateful, meaning
-  // that it has a State object (defined below) that contains fields that affect
-  // how it looks.
-
-  // This class is the configuration for the state. It holds the values (in this
-  // case the title) provided by the parent (in this case the App widget) and
-  // used by the build method of the State. Fields in a Widget subclass are
-  // always marked "final".
-
-  final String title;
+class VideoEnhancerHomePage extends StatefulWidget {
+  const VideoEnhancerHomePage({super.key});
 
   @override
-  State<MyHomePage> createState() => _MyHomePageState();
+  State<VideoEnhancerHomePage> createState() => _VideoEnhancerHomePageState();
 }
 
-class _MyHomePageState extends State<MyHomePage> {
-  int _counter = 0;
+class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
+  final List<DemoClip> _clips = const [
+    DemoClip(
+      title: 'Street Portrait',
+      location: 'Downtown Session',
+      duration: '00:42',
+      accent: Color(0xFF4FA3FF),
+      tag: 'Faces',
+    ),
+    DemoClip(
+      title: 'Ocean B-Roll',
+      location: 'Golden Hour Coast',
+      duration: '01:16',
+      accent: Color(0xFF3ED0C8),
+      tag: 'Nature',
+    ),
+    DemoClip(
+      title: 'Night Drive',
+      location: 'City Motion Pass',
+      duration: '00:58',
+      accent: Color(0xFFFF8A5B),
+      tag: 'Low Light',
+    ),
+  ];
 
-  void _incrementCounter() {
+  final List<EnhancementPreset> _presets = const [
+    EnhancementPreset(
+      title: 'Balanced',
+      subtitle: 'Neutral cleanup with natural detail',
+      accent: Color(0xFF63B3FF),
+      icon: Icons.tune_rounded,
+    ),
+    EnhancementPreset(
+      title: 'Cinematic',
+      subtitle: 'Deeper contrast and dramatic color shaping',
+      accent: Color(0xFFFF9B71),
+      icon: Icons.movie_filter_rounded,
+    ),
+    EnhancementPreset(
+      title: 'Vivid',
+      subtitle: 'Punchier saturation for social clips',
+      accent: Color(0xFF68E0C1),
+      icon: Icons.auto_awesome_rounded,
+    ),
+    EnhancementPreset(
+      title: 'Low-Light Rescue',
+      subtitle: 'Lifts shadows and protects highlights',
+      accent: Color(0xFFD7A5FF),
+      icon: Icons.nightlight_round,
+    ),
+  ];
+
+  int _selectedClipIndex = 0;
+  int _selectedPresetIndex = 0;
+  bool _showAfter = true;
+  bool _isAnalyzing = false;
+  double _brightness = 54;
+  double _contrast = 61;
+  double _saturation = 58;
+  double _warmth = 46;
+
+  DemoClip get _selectedClip => _clips[_selectedClipIndex];
+  EnhancementPreset get _selectedPreset => _presets[_selectedPresetIndex];
+
+  int get _qualityScore {
+    final weightedScore =
+        (_brightness * 0.21) +
+        (_contrast * 0.29) +
+        (_saturation * 0.25) +
+        (_warmth * 0.15) +
+        ((_selectedPresetIndex + 1) * 2.7) +
+        ((_selectedClipIndex + 1) * 1.8);
+    return weightedScore.clamp(0, 100).round();
+  }
+
+  Future<void> _runAiAnalysis() async {
+    if (_isAnalyzing) return;
+
     setState(() {
-      // This call to setState tells the Flutter framework that something has
-      // changed in this State, which causes it to rerun the build method below
-      // so that the display can reflect the updated values. If we changed
-      // _counter without calling setState(), then the build method would not be
-      // called again, and so nothing would appear to happen.
-      _counter++;
+      _isAnalyzing = true;
     });
+
+    await Future<void>.delayed(const Duration(milliseconds: 1400));
+
+    if (!mounted) return;
+
+    final title = _selectedClip.title.toLowerCase();
+    final presetIndex = switch (title) {
+      String value when value.contains('street') => 0,
+      String value when value.contains('ocean') => 2,
+      _ => 3,
+    };
+
+    setState(() {
+      _selectedPresetIndex = presetIndex;
+      _isAnalyzing = false;
+    });
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          'AI Scene Analysis recommended "${_presets[presetIndex].title}" for ${_selectedClip.title}.',
+        ),
+      ),
+    );
+  }
+
+  void _showImportMessage() {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text(
+          'Import flow is still a placeholder. Hook up file picking next.',
+        ),
+      ),
+    );
+  }
+
+  void _showExportMessage() {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text(
+          'Export Enhanced Video is a placeholder for the rendering pipeline.',
+        ),
+      ),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
-    // This method is rerun every time setState is called, for instance as done
-    // by the _incrementCounter method above.
-    //
-    // The Flutter framework has been optimized to make rerunning build methods
-    // fast, so that you can just rebuild anything that needs updating rather
-    // than having to individually change instances of widgets.
+    final isWide = MediaQuery.of(context).size.width >= 980;
+
     return Scaffold(
-      appBar: AppBar(
-        // TRY THIS: Try changing the color here to a specific color (to
-        // Colors.amber, perhaps?) and trigger a hot reload to see the AppBar
-        // change color while the other colors stay the same.
-        backgroundColor: Theme.of(context).colorScheme.inversePrimary,
-        // Here we take the value from the MyHomePage object that was created by
-        // the App.build method, and use it to set our appbar title.
-        title: Text(widget.title),
+      body: Container(
+        decoration: const BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [
+              Color(0xFF0B1425),
+              Color(0xFF09111F),
+              Color(0xFF060A14),
+            ],
+          ),
+        ),
+        child: SafeArea(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(20),
+            child: Center(
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 1320),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _buildHeroSection(context),
+                    const SizedBox(height: 20),
+                    if (isWide)
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Expanded(
+                            flex: 7,
+                            child: Column(
+                              children: [
+                                _buildPreviewCard(context),
+                                const SizedBox(height: 20),
+                                _buildClipShelf(),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(width: 20),
+                          Expanded(
+                            flex: 5,
+                            child: Column(
+                              children: [
+                                _buildAnalysisCard(),
+                                const SizedBox(height: 20),
+                                _buildPresetCard(),
+                                const SizedBox(height: 20),
+                                _buildAdjustmentsCard(),
+                                const SizedBox(height: 20),
+                                _buildExportCard(),
+                              ],
+                            ),
+                          ),
+                        ],
+                      )
+                    else ...[
+                      _buildPreviewCard(context),
+                      const SizedBox(height: 20),
+                      _buildClipShelf(),
+                      const SizedBox(height: 20),
+                      _buildAnalysisCard(),
+                      const SizedBox(height: 20),
+                      _buildPresetCard(),
+                      const SizedBox(height: 20),
+                      _buildAdjustmentsCard(),
+                      const SizedBox(height: 20),
+                      _buildExportCard(),
+                    ],
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
       ),
-      body: Center(
-        // Center is a layout widget. It takes a single child and positions it
-        // in the middle of the parent.
-        child: Column(
-          // Column is also a layout widget. It takes a list of children and
-          // arranges them vertically. By default, it sizes itself to fit its
-          // children horizontally, and tries to be as tall as its parent.
-          //
-          // Column has various properties to control how it sizes itself and
-          // how it positions its children. Here we use mainAxisAlignment to
-          // center the children vertically; the main axis here is the vertical
-          // axis because Columns are vertical (the cross axis would be
-          // horizontal).
-          //
-          // TRY THIS: Invoke "debug painting" (choose the "Toggle Debug Paint"
-          // action in the IDE, or press "p" in the console), to see the
-          // wireframe for each widget.
-          mainAxisAlignment: .center,
+    );
+  }
+
+  Widget _buildHeroSection(BuildContext context) {
+    return Card(
+      clipBehavior: Clip.antiAlias,
+      child: Container(
+        padding: const EdgeInsets.all(28),
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [
+              _selectedClip.accent.withValues(alpha: 0.25),
+              const Color(0xFF121D31),
+              const Color(0xFF0C1424),
+            ],
+          ),
+        ),
+        child: Wrap(
+          runSpacing: 20,
+          spacing: 20,
+          alignment: WrapAlignment.spaceBetween,
+          crossAxisAlignment: WrapCrossAlignment.center,
           children: [
-            const Text('You have pushed the button this many times:'),
-            Text(
-              '$_counter',
-              style: Theme.of(context).textTheme.headlineMedium,
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 680),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 8,
+                    ),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withValues(alpha: 0.06),
+                      borderRadius: BorderRadius.circular(999),
+                      border: Border.all(
+                        color: Colors.white.withValues(alpha: 0.12),
+                      ),
+                    ),
+                    child: const Text('Realtime enhancement workspace'),
+                  ),
+                  const SizedBox(height: 18),
+                  Text(
+                    'Craft a cleaner, sharper look before the real processing pipeline lands.',
+                    style: Theme.of(context).textTheme.headlineMedium?.copyWith(
+                      fontWeight: FontWeight.w800,
+                      height: 1.05,
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  Text(
+                    'This rebuilt screen gives you a complete placeholder layout for import, preview, AI analysis, preset selection, manual color shaping, and export.',
+                    style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                      color: Colors.white70,
+                      height: 1.5,
+                    ),
+                  ),
+                  const SizedBox(height: 22),
+                  Wrap(
+                    spacing: 12,
+                    runSpacing: 12,
+                    children: [
+                      FilledButton.icon(
+                        onPressed: _showImportMessage,
+                        icon: const Icon(Icons.add_to_photos_rounded),
+                        label: const Text('Import Video'),
+                      ),
+                      OutlinedButton.icon(
+                        onPressed: _runAiAnalysis,
+                        icon: const Icon(Icons.auto_awesome_rounded),
+                        label: const Text('AI Scene Analysis'),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 320),
+              child: Column(
+                children: [
+                  _buildMetricTile('Active clip', _selectedClip.title),
+                  const SizedBox(height: 12),
+                  _buildMetricTile('Preset', _selectedPreset.title),
+                  const SizedBox(height: 12),
+                  _buildMetricTile('Quality score', '$_qualityScore / 100'),
+                ],
+              ),
             ),
           ],
         ),
       ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: _incrementCounter,
-        tooltip: 'Increment',
-        child: const Icon(Icons.add),
+    );
+  }
+
+  Widget _buildMetricTile(String label, String value) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.05),
+        borderRadius: BorderRadius.circular(22),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.09)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            label.toUpperCase(),
+            style: const TextStyle(
+              fontSize: 12,
+              letterSpacing: 1.2,
+              color: Colors.white54,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            value,
+            style: const TextStyle(
+              fontSize: 18,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ],
       ),
     );
+  }
+
+  Widget _buildPreviewCard(BuildContext context) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(22),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Preview',
+                        style: Theme.of(context).textTheme.headlineSmall
+                            ?.copyWith(fontWeight: FontWeight.w800),
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        '${_selectedClip.location} • ${_selectedClip.duration}',
+                        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                          color: Colors.white60,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                SegmentedButton<bool>(
+                  segments: const [
+                    ButtonSegment<bool>(value: false, label: Text('Before')),
+                    ButtonSegment<bool>(value: true, label: Text('After')),
+                  ],
+                  selected: {_showAfter},
+                  onSelectionChanged: (selection) {
+                    setState(() {
+                      _showAfter = selection.first;
+                    });
+                  },
+                ),
+              ],
+            ),
+            const SizedBox(height: 18),
+            AspectRatio(
+              aspectRatio: 16 / 9,
+              child: Container(
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(28),
+                  gradient: LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    colors: _showAfter
+                        ? [
+                            _selectedClip.accent.withValues(alpha: 0.30),
+                            const Color(0xFF172842),
+                            const Color(0xFF0A1423),
+                          ]
+                        : [
+                            const Color(0xFF3A4658),
+                            const Color(0xFF202A38),
+                            const Color(0xFF121823),
+                          ],
+                  ),
+                ),
+                child: Stack(
+                  children: [
+                    Positioned.fill(
+                      child: CustomPaint(
+                        painter: FramePainter(
+                          accent: _selectedClip.accent,
+                          emphasizeEnhancement: _showAfter,
+                        ),
+                      ),
+                    ),
+                    Positioned(
+                      top: 18,
+                      left: 18,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 8,
+                        ),
+                        decoration: BoxDecoration(
+                          color: Colors.black.withValues(alpha: 0.26),
+                          borderRadius: BorderRadius.circular(999),
+                        ),
+                        child: Text(
+                          _showAfter ? 'Enhanced Preview' : 'Original Preview',
+                          style: const TextStyle(fontWeight: FontWeight.w600),
+                        ),
+                      ),
+                    ),
+                    Center(
+                      child: Container(
+                        width: 78,
+                        height: 78,
+                        decoration: BoxDecoration(
+                          color: Colors.white.withValues(alpha: 0.12),
+                          shape: BoxShape.circle,
+                          border: Border.all(
+                            color: Colors.white.withValues(alpha: 0.18),
+                          ),
+                        ),
+                        child: const Icon(
+                          Icons.play_arrow_rounded,
+                          size: 42,
+                        ),
+                      ),
+                    ),
+                    Positioned(
+                      right: 18,
+                      bottom: 18,
+                      child: Container(
+                        padding: const EdgeInsets.all(14),
+                        decoration: BoxDecoration(
+                          color: Colors.black.withValues(alpha: 0.24),
+                          borderRadius: BorderRadius.circular(18),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text(
+                              'Preview gain',
+                              style: TextStyle(color: Colors.white70),
+                            ),
+                            const SizedBox(height: 8),
+                            Text(
+                              '+${(_qualityScore / 5).round()}%',
+                              style: const TextStyle(
+                                fontSize: 24,
+                                fontWeight: FontWeight.w800,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildClipShelf() {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(22),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Import Queue',
+              style: TextStyle(fontSize: 24, fontWeight: FontWeight.w800),
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              'Pick the placeholder clip you want to shape.',
+              style: TextStyle(color: Colors.white60),
+            ),
+            const SizedBox(height: 18),
+            Wrap(
+              spacing: 14,
+              runSpacing: 14,
+              children: List.generate(_clips.length, (index) {
+                final clip = _clips[index];
+                final isSelected = index == _selectedClipIndex;
+                return InkWell(
+                  onTap: () {
+                    setState(() {
+                      _selectedClipIndex = index;
+                    });
+                  },
+                  borderRadius: BorderRadius.circular(22),
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 180),
+                    width: 250,
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(22),
+                      color: isSelected
+                          ? clip.accent.withValues(alpha: 0.18)
+                          : Colors.white.withValues(alpha: 0.04),
+                      border: Border.all(
+                        color: isSelected ? clip.accent : const Color(0xFF243651),
+                        width: isSelected ? 1.4 : 1,
+                      ),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Container(
+                          height: 96,
+                          decoration: BoxDecoration(
+                            borderRadius: BorderRadius.circular(18),
+                            gradient: LinearGradient(
+                              colors: [
+                                clip.accent.withValues(alpha: 0.55),
+                                const Color(0xFF101B2D),
+                              ],
+                            ),
+                          ),
+                          child: const Center(
+                            child: Icon(Icons.video_collection_rounded, size: 36),
+                          ),
+                        ),
+                        const SizedBox(height: 14),
+                        Text(
+                          clip.title,
+                          style: const TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                        const SizedBox(height: 6),
+                        Text(
+                          clip.location,
+                          style: const TextStyle(color: Colors.white60),
+                        ),
+                        const SizedBox(height: 12),
+                        Row(
+                          children: [
+                            _tagChip(clip.tag),
+                            const Spacer(),
+                            Text(
+                              clip.duration,
+                              style: const TextStyle(color: Colors.white70),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                );
+              }),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _tagChip(String label) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.07),
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Text(label, style: const TextStyle(fontSize: 12)),
+    );
+  }
+
+  Widget _buildAnalysisCard() {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(22),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'AI Scene Analysis',
+              style: TextStyle(fontSize: 24, fontWeight: FontWeight.w800),
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              'Placeholder intelligence that recommends a look based on the selected scene.',
+              style: TextStyle(color: Colors.white60, height: 1.5),
+            ),
+            const SizedBox(height: 18),
+            Row(
+              children: [
+                Expanded(
+                  child: LinearProgressIndicator(
+                    value: _isAnalyzing ? null : _qualityScore / 100,
+                    minHeight: 10,
+                    borderRadius: BorderRadius.circular(999),
+                    backgroundColor: Colors.white.withValues(alpha: 0.08),
+                  ),
+                ),
+                const SizedBox(width: 14),
+                Text(
+                  _isAnalyzing ? 'Analyzing...' : '$_qualityScore%',
+                  style: const TextStyle(fontWeight: FontWeight.w700),
+                ),
+              ],
+            ),
+            const SizedBox(height: 18),
+            Wrap(
+              spacing: 10,
+              runSpacing: 10,
+              children: const [
+                _InsightPill(label: 'Noise reduction', value: 'Medium'),
+                _InsightPill(label: 'Motion stability', value: 'High'),
+                _InsightPill(label: 'Face recovery', value: 'Active'),
+              ],
+            ),
+            const SizedBox(height: 18),
+            FilledButton.icon(
+              onPressed: _runAiAnalysis,
+              icon: _isAnalyzing
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.auto_fix_high_rounded),
+              label: Text(_isAnalyzing ? 'Analyzing Clip' : 'Run AI Pass'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPresetCard() {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(22),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Enhancement Presets',
+              style: TextStyle(fontSize: 24, fontWeight: FontWeight.w800),
+            ),
+            const SizedBox(height: 18),
+            ...List.generate(_presets.length, (index) {
+              final preset = _presets[index];
+              final isSelected = index == _selectedPresetIndex;
+              return Padding(
+                padding: EdgeInsets.only(
+                  bottom: index == _presets.length - 1 ? 0 : 12,
+                ),
+                child: InkWell(
+                  onTap: () {
+                    setState(() {
+                      _selectedPresetIndex = index;
+                    });
+                  },
+                  borderRadius: BorderRadius.circular(20),
+                  child: Container(
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(20),
+                      color: isSelected
+                          ? preset.accent.withValues(alpha: 0.18)
+                          : Colors.white.withValues(alpha: 0.04),
+                      border: Border.all(
+                        color: isSelected ? preset.accent : const Color(0xFF22324D),
+                      ),
+                    ),
+                    child: Row(
+                      children: [
+                        Container(
+                          width: 44,
+                          height: 44,
+                          decoration: BoxDecoration(
+                            color: preset.accent.withValues(alpha: 0.16),
+                            shape: BoxShape.circle,
+                          ),
+                          child: Icon(preset.icon, color: preset.accent),
+                        ),
+                        const SizedBox(width: 14),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                preset.title,
+                                style: const TextStyle(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                preset.subtitle,
+                                style: const TextStyle(color: Colors.white60),
+                              ),
+                            ],
+                          ),
+                        ),
+                        if (isSelected)
+                          const Icon(Icons.check_circle_rounded, color: Colors.white),
+                      ],
+                    ),
+                  ),
+                ),
+              );
+            }),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildAdjustmentsCard() {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(22),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Manual Adjustments',
+              style: TextStyle(fontSize: 24, fontWeight: FontWeight.w800),
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              'These sliders are still demo controls, but the layout is ready for real processing values.',
+              style: TextStyle(color: Colors.white60, height: 1.5),
+            ),
+            const SizedBox(height: 18),
+            _buildSlider(
+              label: 'Brightness',
+              value: _brightness,
+              onChanged: (value) => setState(() => _brightness = value),
+            ),
+            _buildSlider(
+              label: 'Contrast',
+              value: _contrast,
+              onChanged: (value) => setState(() => _contrast = value),
+            ),
+            _buildSlider(
+              label: 'Saturation',
+              value: _saturation,
+              onChanged: (value) => setState(() => _saturation = value),
+            ),
+            _buildSlider(
+              label: 'Warmth',
+              value: _warmth,
+              onChanged: (value) => setState(() => _warmth = value),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSlider({
+    required String label,
+    required double value,
+    required ValueChanged<double> onChanged,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 14),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Text(label, style: const TextStyle(fontWeight: FontWeight.w700)),
+              const Spacer(),
+              Text(
+                value.round().toString(),
+                style: const TextStyle(color: Colors.white60),
+              ),
+            ],
+          ),
+          Slider(
+            value: value,
+            min: 0,
+            max: 100,
+            onChanged: onChanged,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildExportCard() {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(22),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Export',
+              style: TextStyle(fontSize: 24, fontWeight: FontWeight.w800),
+            ),
+            const SizedBox(height: 16),
+            Container(
+              padding: const EdgeInsets.all(18),
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: 0.04),
+                borderRadius: BorderRadius.circular(22),
+              ),
+              child: const Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Export Enhanced Video',
+                    style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  SizedBox(height: 8),
+                  Text(
+                    'Placeholder settings for codec, resolution, and delivery output.',
+                    style: TextStyle(color: Colors.white60, height: 1.5),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 16),
+            Row(
+              children: [
+                Expanded(child: _exportInfo('Resolution', '4K UHD')),
+                const SizedBox(width: 12),
+                Expanded(child: _exportInfo('Format', 'H.264 MP4')),
+                const SizedBox(width: 12),
+                Expanded(child: _exportInfo('Bitrate', '24 Mbps')),
+              ],
+            ),
+            const SizedBox(height: 18),
+            FilledButton.icon(
+              onPressed: _showExportMessage,
+              icon: const Icon(Icons.file_download_done_rounded),
+              label: const Text('Start Placeholder Export'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _exportInfo(String label, String value) {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.04),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: const Color(0xFF20304A)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            label.toUpperCase(),
+            style: const TextStyle(
+              fontSize: 11,
+              letterSpacing: 1.1,
+              color: Colors.white54,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            value,
+            style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _InsightPill extends StatelessWidget {
+  const _InsightPill({
+    required this.label,
+    required this.value,
+  });
+
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.05),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+      ),
+      child: RichText(
+        text: TextSpan(
+          style: DefaultTextStyle.of(context).style,
+          children: [
+            TextSpan(
+              text: '$label: ',
+              style: const TextStyle(color: Colors.white60),
+            ),
+            TextSpan(
+              text: value,
+              style: const TextStyle(fontWeight: FontWeight.w700),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class DemoClip {
+  const DemoClip({
+    required this.title,
+    required this.location,
+    required this.duration,
+    required this.accent,
+    required this.tag,
+  });
+
+  final String title;
+  final String location;
+  final String duration;
+  final Color accent;
+  final String tag;
+}
+
+class EnhancementPreset {
+  const EnhancementPreset({
+    required this.title,
+    required this.subtitle,
+    required this.accent,
+    required this.icon,
+  });
+
+  final String title;
+  final String subtitle;
+  final Color accent;
+  final IconData icon;
+}
+
+class FramePainter extends CustomPainter {
+  FramePainter({
+    required this.accent,
+    required this.emphasizeEnhancement,
+  });
+
+  final Color accent;
+  final bool emphasizeEnhancement;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final fill = Paint()
+      ..shader = LinearGradient(
+        begin: Alignment.topLeft,
+        end: Alignment.bottomRight,
+        colors: [
+          accent.withValues(alpha: emphasizeEnhancement ? 0.28 : 0.12),
+          Colors.transparent,
+          Colors.white.withValues(alpha: emphasizeEnhancement ? 0.08 : 0.03),
+        ],
+      ).createShader(Offset.zero & size);
+
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(
+        Offset.zero & size,
+        const Radius.circular(28),
+      ),
+      fill,
+    );
+
+    final stroke = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = emphasizeEnhancement ? 2.3 : 1.4
+      ..color = accent.withValues(alpha: emphasizeEnhancement ? 0.55 : 0.22);
+
+    final wave = Path()..moveTo(0, size.height * 0.76);
+    for (double x = 0; x <= size.width; x += 12) {
+      final progress = x / size.width;
+      final amplitude = emphasizeEnhancement ? 22.0 : 14.0;
+      final y =
+          size.height * 0.68 +
+          math.sin(progress * math.pi * 2.8) * amplitude +
+          math.cos(progress * math.pi * 5.6) * 7;
+      wave.lineTo(x, y);
+    }
+
+    canvas.drawPath(wave, stroke);
+
+    final glow = Paint()
+      ..color = Colors.white.withValues(
+        alpha: emphasizeEnhancement ? 0.10 : 0.05,
+      )
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 18);
+
+    canvas.drawCircle(
+      Offset(size.width * 0.76, size.height * 0.30),
+      emphasizeEnhancement ? 78 : 52,
+      glow,
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant FramePainter oldDelegate) {
+    return oldDelegate.accent != accent ||
+        oldDelegate.emphasizeEnhancement != emphasizeEnhancement;
   }
 }
