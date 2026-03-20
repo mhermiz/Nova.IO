@@ -1,6 +1,11 @@
 import 'dart:math' as math;
+import 'dart:io';
+import 'dart:typed_data';
 
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:video_player/video_player.dart';
+import 'package:video_thumbnail/video_thumbnail.dart';
 
 void main() {
   runApp(const VideoEnhancerApp());
@@ -47,29 +52,7 @@ class VideoEnhancerHomePage extends StatefulWidget {
 }
 
 class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
-  final List<DemoClip> _clips = const [
-    DemoClip(
-      title: 'Street Portrait',
-      location: 'Downtown Session',
-      duration: '00:42',
-      accent: Color(0xFF4FA3FF),
-      tag: 'Faces',
-    ),
-    DemoClip(
-      title: 'Ocean B-Roll',
-      location: 'Golden Hour Coast',
-      duration: '01:16',
-      accent: Color(0xFF3ED0C8),
-      tag: 'Nature',
-    ),
-    DemoClip(
-      title: 'Night Drive',
-      location: 'City Motion Pass',
-      duration: '00:58',
-      accent: Color(0xFFFF8A5B),
-      tag: 'Low Light',
-    ),
-  ];
+  final List<DemoClip> _clips = [];
 
   final List<EnhancementPreset> _presets = const [
     EnhancementPreset(
@@ -106,9 +89,25 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
   double _contrast = 61;
   double _saturation = 58;
   double _warmth = 46;
+  VideoPlayerController? _videoController;
+  bool _isPreviewLoading = false;
+  final Map<String, Uint8List> _clipThumbnails = {};
 
-  DemoClip get _selectedClip => _clips[_selectedClipIndex];
+  DemoClip? get _selectedClip =>
+      _clips.isEmpty ? null : _clips[_selectedClipIndex];
   EnhancementPreset get _selectedPreset => _presets[_selectedPresetIndex];
+
+  @override
+  void initState() {
+    super.initState();
+    _syncPreviewController();
+  }
+
+  @override
+  void dispose() {
+    _videoController?.dispose();
+    super.dispose();
+  }
 
   int get _qualityScore {
     final weightedScore =
@@ -122,7 +121,8 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
   }
 
   Future<void> _runAiAnalysis() async {
-    if (_isAnalyzing) return;
+    final selectedClip = _selectedClip;
+    if (_isAnalyzing || selectedClip == null) return;
 
     setState(() {
       _isAnalyzing = true;
@@ -132,7 +132,7 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
 
     if (!mounted) return;
 
-    final title = _selectedClip.title.toLowerCase();
+    final title = selectedClip.title.toLowerCase();
     final presetIndex = switch (title) {
       String value when value.contains('street') => 0,
       String value when value.contains('ocean') => 2,
@@ -147,18 +147,40 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(
-          'AI Scene Analysis recommended "${_presets[presetIndex].title}" for ${_selectedClip.title}.',
+          'AI Scene Analysis recommended "${_presets[presetIndex].title}" for ${selectedClip.title}.',
         ),
       ),
     );
   }
 
-  void _showImportMessage() {
+  Future<void> _importVideo() async {
+    final result = await FilePicker.platform.pickFiles(
+      type: FileType.video,
+      allowMultiple: true,
+    );
+
+    if (!mounted || result == null || result.files.isEmpty) {
+      return;
+    }
+
+    final importedClips = result.files.map(_buildImportedClip).toList();
+
+    setState(() {
+      _clips.addAll(importedClips);
+      _selectedClipIndex = _clips.length - importedClips.length;
+    });
+
+    _generateThumbnails(importedClips);
+    await _syncPreviewController();
+
+    if (!mounted) {
+      return;
+    }
+
+    final clipLabel = importedClips.length == 1 ? 'video' : 'videos';
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text(
-          'Import flow is still a placeholder. Hook up file picking next.',
-        ),
+      SnackBar(
+        content: Text('Imported ${importedClips.length} $clipLabel into the queue.'),
       ),
     );
   }
@@ -256,6 +278,7 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
   }
 
   Widget _buildHeroSection(BuildContext context) {
+    final selectedClip = _selectedClip;
     return Card(
       clipBehavior: Clip.antiAlias,
       child: Container(
@@ -265,7 +288,9 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
             begin: Alignment.topLeft,
             end: Alignment.bottomRight,
             colors: [
-              _selectedClip.accent.withValues(alpha: 0.25),
+              (selectedClip?.accent ?? const Color(0xFF4FA3FF)).withValues(
+                alpha: 0.25,
+              ),
               const Color(0xFF121D31),
               const Color(0xFF0C1424),
             ],
@@ -318,7 +343,7 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
                     runSpacing: 12,
                     children: [
                       FilledButton.icon(
-                        onPressed: _showImportMessage,
+                        onPressed: _importVideo,
                         icon: const Icon(Icons.add_to_photos_rounded),
                         label: const Text('Import Video'),
                       ),
@@ -336,7 +361,10 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
               constraints: const BoxConstraints(maxWidth: 320),
               child: Column(
                 children: [
-                  _buildMetricTile('Active clip', _selectedClip.title),
+                  _buildMetricTile(
+                    'Active clip',
+                    selectedClip?.title ?? 'No clip selected',
+                  ),
                   const SizedBox(height: 12),
                   _buildMetricTile('Preset', _selectedPreset.title),
                   const SizedBox(height: 12),
@@ -384,6 +412,7 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
   }
 
   Widget _buildPreviewCard(BuildContext context) {
+    final selectedClip = _selectedClip;
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(22),
@@ -403,7 +432,9 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
                       ),
                       const SizedBox(height: 6),
                       Text(
-                        '${_selectedClip.location} • ${_selectedClip.duration}',
+                        selectedClip == null
+                            ? 'Import a video to start previewing'
+                            : '${selectedClip.location} • ${selectedClip.duration}',
                         style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                           color: Colors.white60,
                         ),
@@ -426,105 +457,170 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
               ],
             ),
             const SizedBox(height: 18),
-            AspectRatio(
-              aspectRatio: 16 / 9,
-              child: Container(
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(28),
-                  gradient: LinearGradient(
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                    colors: _showAfter
-                        ? [
-                            _selectedClip.accent.withValues(alpha: 0.30),
-                            const Color(0xFF172842),
-                            const Color(0xFF0A1423),
-                          ]
-                        : [
-                            const Color(0xFF3A4658),
-                            const Color(0xFF202A38),
-                            const Color(0xFF121823),
-                          ],
+            _buildPreviewViewport(),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPreviewViewport() {
+    final selectedClip = _selectedClip;
+    final controller = _videoController;
+    final hasVideo = controller != null && controller.value.isInitialized;
+
+    return AspectRatio(
+      aspectRatio: hasVideo ? controller.value.aspectRatio : 16 / 9,
+      child: Container(
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(28),
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: _showAfter
+                ? [
+                    (selectedClip?.accent ?? const Color(0xFF4FA3FF)).withValues(
+                      alpha: 0.30,
+                    ),
+                    const Color(0xFF172842),
+                    const Color(0xFF0A1423),
+                  ]
+                : [
+                    const Color(0xFF3A4658),
+                    const Color(0xFF202A38),
+                    const Color(0xFF121823),
+                  ],
+          ),
+        ),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(28),
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              if (hasVideo)
+                FittedBox(
+                  fit: BoxFit.cover,
+                  child: SizedBox(
+                    width: controller.value.size.width,
+                    height: controller.value.size.height,
+                    child: VideoPlayer(controller),
+                  ),
+                )
+              else
+                if (selectedClip != null)
+                  CustomPaint(
+                    painter: FramePainter(
+                      accent: selectedClip.accent,
+                      emphasizeEnhancement: _showAfter,
+                    ),
+                  )
+                else
+                  Container(
+                    alignment: Alignment.center,
+                    padding: const EdgeInsets.all(24),
+                    child: const Text(
+                      'No imported video yet.\nUse Import Video to add one to the queue.',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        color: Colors.white70,
+                        height: 1.5,
+                        fontSize: 16,
+                      ),
+                    ),
+                  ),
+              if (_isPreviewLoading)
+                Container(
+                  color: Colors.black.withValues(alpha: 0.32),
+                  child: const Center(
+                    child: CircularProgressIndicator(),
                   ),
                 ),
-                child: Stack(
-                  children: [
-                    Positioned.fill(
-                      child: CustomPaint(
-                        painter: FramePainter(
-                          accent: _selectedClip.accent,
-                          emphasizeEnhancement: _showAfter,
-                        ),
-                      ),
-                    ),
-                    Positioned(
-                      top: 18,
-                      left: 18,
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 12,
-                          vertical: 8,
-                        ),
-                        decoration: BoxDecoration(
-                          color: Colors.black.withValues(alpha: 0.26),
-                          borderRadius: BorderRadius.circular(999),
-                        ),
-                        child: Text(
-                          _showAfter ? 'Enhanced Preview' : 'Original Preview',
-                          style: const TextStyle(fontWeight: FontWeight.w600),
-                        ),
-                      ),
-                    ),
-                    Center(
-                      child: Container(
-                        width: 78,
-                        height: 78,
-                        decoration: BoxDecoration(
-                          color: Colors.white.withValues(alpha: 0.12),
-                          shape: BoxShape.circle,
-                          border: Border.all(
-                            color: Colors.white.withValues(alpha: 0.18),
-                          ),
-                        ),
-                        child: const Icon(
-                          Icons.play_arrow_rounded,
-                          size: 42,
-                        ),
-                      ),
-                    ),
-                    Positioned(
-                      right: 18,
-                      bottom: 18,
-                      child: Container(
-                        padding: const EdgeInsets.all(14),
-                        decoration: BoxDecoration(
-                          color: Colors.black.withValues(alpha: 0.24),
-                          borderRadius: BorderRadius.circular(18),
-                        ),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            const Text(
-                              'Preview gain',
-                              style: TextStyle(color: Colors.white70),
-                            ),
-                            const SizedBox(height: 8),
-                            Text(
-                              '+${(_qualityScore / 5).round()}%',
-                              style: const TextStyle(
-                                fontSize: 24,
-                                fontWeight: FontWeight.w800,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ],
+              Positioned(
+                top: 18,
+                left: 18,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 8,
+                  ),
+                  decoration: BoxDecoration(
+                    color: Colors.black.withValues(alpha: 0.26),
+                    borderRadius: BorderRadius.circular(999),
+                  ),
+                  child: Text(
+                    hasVideo
+                        ? (_showAfter ? 'Imported Preview' : 'Original File')
+                        : (_showAfter ? 'Enhanced Preview' : 'Original Preview'),
+                    style: const TextStyle(fontWeight: FontWeight.w600),
+                  ),
                 ),
               ),
-            ),
-          ],
+              Center(
+                child: GestureDetector(
+                  onTap: hasVideo
+                      ? () {
+                          setState(() {
+                            if (controller.value.isPlaying) {
+                              controller.pause();
+                            } else {
+                              controller.play();
+                            }
+                          });
+                        }
+                      : null,
+                  child: Container(
+                    width: 78,
+                    height: 78,
+                    decoration: BoxDecoration(
+                      color: Colors.white.withValues(alpha: 0.12),
+                      shape: BoxShape.circle,
+                      border: Border.all(
+                        color: Colors.white.withValues(alpha: 0.18),
+                      ),
+                    ),
+                    child: Icon(
+                      hasVideo && controller.value.isPlaying
+                          ? Icons.pause_rounded
+                          : Icons.play_arrow_rounded,
+                      size: 42,
+                    ),
+                  ),
+                ),
+              ),
+              Positioned(
+                right: 18,
+                bottom: 18,
+                child: Container(
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(
+                    color: Colors.black.withValues(alpha: 0.24),
+                    borderRadius: BorderRadius.circular(18),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        hasVideo ? 'Imported file' : 'Preview gain',
+                        style: const TextStyle(color: Colors.white70),
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        hasVideo
+                            ? (selectedClip?.duration == '--:--'
+                                ? 'Ready'
+                                : selectedClip!.duration)
+                            : '+${(_qualityScore / 5).round()}%',
+                        style: const TextStyle(
+                          fontSize: 24,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -547,83 +643,130 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
               style: TextStyle(color: Colors.white60),
             ),
             const SizedBox(height: 18),
-            Wrap(
-              spacing: 14,
-              runSpacing: 14,
-              children: List.generate(_clips.length, (index) {
-                final clip = _clips[index];
-                final isSelected = index == _selectedClipIndex;
-                return InkWell(
-                  onTap: () {
-                    setState(() {
-                      _selectedClipIndex = index;
-                    });
-                  },
+            if (_clips.isEmpty)
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(24),
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.04),
                   borderRadius: BorderRadius.circular(22),
-                  child: AnimatedContainer(
-                    duration: const Duration(milliseconds: 180),
-                    width: 250,
-                    padding: const EdgeInsets.all(16),
-                    decoration: BoxDecoration(
-                      borderRadius: BorderRadius.circular(22),
-                      color: isSelected
-                          ? clip.accent.withValues(alpha: 0.18)
-                          : Colors.white.withValues(alpha: 0.04),
-                      border: Border.all(
-                        color: isSelected ? clip.accent : const Color(0xFF243651),
-                        width: isSelected ? 1.4 : 1,
+                  border: Border.all(color: const Color(0xFF243651)),
+                ),
+                child: const Text(
+                  'No imported videos yet. Tap Import Video above to add a clip.',
+                  style: TextStyle(color: Colors.white70, height: 1.5),
+                ),
+              )
+            else
+              Wrap(
+                spacing: 14,
+                runSpacing: 14,
+                children: List.generate(_clips.length, (index) {
+                  final clip = _clips[index];
+                  final isSelected = index == _selectedClipIndex;
+                  return InkWell(
+                    onTap: () {
+                      setState(() {
+                        _selectedClipIndex = index;
+                      });
+                      _syncPreviewController();
+                    },
+                    borderRadius: BorderRadius.circular(22),
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 180),
+                      width: 250,
+                      padding: const EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(22),
+                        color: isSelected
+                            ? clip.accent.withValues(alpha: 0.18)
+                            : Colors.white.withValues(alpha: 0.04),
+                        border: Border.all(
+                          color: isSelected ? clip.accent : const Color(0xFF243651),
+                          width: isSelected ? 1.4 : 1,
+                        ),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          _buildClipThumbnail(clip),
+                          const SizedBox(height: 14),
+                          Text(
+                            clip.title,
+                            style: const TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                          const SizedBox(height: 6),
+                          Text(
+                            clip.location,
+                            style: const TextStyle(color: Colors.white60),
+                          ),
+                          const SizedBox(height: 12),
+                          Row(
+                            children: [
+                              _tagChip(clip.tag),
+                              const Spacer(),
+                              Text(
+                                clip.duration,
+                                style: const TextStyle(color: Colors.white70),
+                              ),
+                            ],
+                          ),
+                        ],
                       ),
                     ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Container(
-                          height: 96,
-                          decoration: BoxDecoration(
-                            borderRadius: BorderRadius.circular(18),
-                            gradient: LinearGradient(
-                              colors: [
-                                clip.accent.withValues(alpha: 0.55),
-                                const Color(0xFF101B2D),
-                              ],
-                            ),
-                          ),
-                          child: const Center(
-                            child: Icon(Icons.video_collection_rounded, size: 36),
-                          ),
-                        ),
-                        const SizedBox(height: 14),
-                        Text(
-                          clip.title,
-                          style: const TextStyle(
-                            fontSize: 18,
-                            fontWeight: FontWeight.w700,
-                          ),
-                        ),
-                        const SizedBox(height: 6),
-                        Text(
-                          clip.location,
-                          style: const TextStyle(color: Colors.white60),
-                        ),
-                        const SizedBox(height: 12),
-                        Row(
-                          children: [
-                            _tagChip(clip.tag),
-                            const Spacer(),
-                            Text(
-                              clip.duration,
-                              style: const TextStyle(color: Colors.white70),
-                            ),
-                          ],
-                        ),
-                      ],
-                    ),
-                  ),
-                );
-              }),
-            ),
+                  );
+                }),
+              ),
           ],
         ),
+      ),
+    );
+  }
+
+  Widget _buildClipThumbnail(DemoClip clip) {
+    final filePath = clip.filePath;
+    final thumbnailBytes =
+        filePath == null ? null : _clipThumbnails[filePath];
+
+    return Container(
+      height: 96,
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(18),
+        gradient: LinearGradient(
+          colors: [
+            clip.accent.withValues(alpha: 0.55),
+            const Color(0xFF101B2D),
+          ],
+        ),
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(18),
+        child: thumbnailBytes != null
+            ? Stack(
+                fit: StackFit.expand,
+                children: [
+                  Image.memory(
+                    thumbnailBytes,
+                    fit: BoxFit.cover,
+                  ),
+                  Container(
+                    color: Colors.black.withValues(alpha: 0.18),
+                  ),
+                  const Center(
+                    child: Icon(
+                      Icons.play_circle_fill_rounded,
+                      size: 34,
+                      color: Colors.white,
+                    ),
+                  ),
+                ],
+              )
+            : const Center(
+                child: Icon(Icons.video_collection_rounded, size: 36),
+              ),
       ),
     );
   }
@@ -637,6 +780,138 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
       ),
       child: Text(label, style: const TextStyle(fontSize: 12)),
     );
+  }
+
+  DemoClip _buildImportedClip(PlatformFile file) {
+    const accents = [
+      Color(0xFF77B6FF),
+      Color(0xFF68E0C1),
+      Color(0xFFFFA66B),
+      Color(0xFFD7A5FF),
+    ];
+
+    final accent = accents[_clips.length % accents.length];
+    final normalizedName = file.name.trim().isEmpty ? 'Imported Video' : file.name;
+
+    return DemoClip(
+      title: normalizedName,
+      location: _formatImportSource(file),
+      duration: '--:--',
+      accent: accent,
+      tag: 'Imported',
+      filePath: file.path,
+    );
+  }
+
+  Future<void> _generateThumbnails(List<DemoClip> clips) async {
+    for (final clip in clips) {
+      final filePath = clip.filePath;
+      if (filePath == null || filePath.isEmpty || _clipThumbnails.containsKey(filePath)) {
+        continue;
+      }
+
+      try {
+        final bytes = await VideoThumbnail.thumbnailData(
+          video: filePath,
+          imageFormat: ImageFormat.JPEG,
+          maxWidth: 360,
+          quality: 70,
+          timeMs: 500,
+        );
+
+        if (!mounted || bytes == null) {
+          continue;
+        }
+
+        setState(() {
+          _clipThumbnails[filePath] = bytes;
+        });
+      } catch (_) {
+        continue;
+      }
+    }
+  }
+
+  String _formatImportSource(PlatformFile file) {
+    final extension = file.extension;
+    final sizeInMb = file.size / (1024 * 1024);
+    final sizeLabel = sizeInMb >= 1
+        ? '${sizeInMb.toStringAsFixed(1)} MB'
+        : '${(file.size / 1024).toStringAsFixed(0)} KB';
+
+    if (extension == null || extension.isEmpty) {
+      return 'From device • $sizeLabel';
+    }
+
+    return '${extension.toUpperCase()} • $sizeLabel';
+  }
+
+  String _formatDuration(Duration duration) {
+    final totalSeconds = duration.inSeconds;
+    final minutes = (totalSeconds ~/ 60).toString().padLeft(2, '0');
+    final seconds = (totalSeconds % 60).toString().padLeft(2, '0');
+    return '$minutes:$seconds';
+  }
+
+  void _updateClipDuration(String filePath, String durationLabel) {
+    final clipIndex = _clips.indexWhere((clip) => clip.filePath == filePath);
+    if (clipIndex == -1 || _clips[clipIndex].duration == durationLabel) {
+      return;
+    }
+
+    _clips[clipIndex] = _clips[clipIndex].copyWith(duration: durationLabel);
+  }
+
+  Future<void> _syncPreviewController() async {
+    final previousController = _videoController;
+    _videoController = null;
+
+    final filePath = _selectedClip?.filePath;
+    if (filePath == null || filePath.isEmpty) {
+      await previousController?.dispose();
+      if (mounted) {
+        setState(() {
+          _isPreviewLoading = false;
+        });
+      }
+      return;
+    }
+
+    if (mounted) {
+      setState(() {
+        _isPreviewLoading = true;
+      });
+    }
+
+    final controller = VideoPlayerController.file(File(filePath));
+    await previousController?.dispose();
+
+    try {
+      await controller.initialize();
+      await controller.setLooping(true);
+
+      if (!mounted || _selectedClip?.filePath != filePath) {
+        await controller.dispose();
+        return;
+      }
+
+      _updateClipDuration(
+        filePath,
+        _formatDuration(controller.value.duration),
+      );
+
+      setState(() {
+        _videoController = controller;
+        _isPreviewLoading = false;
+      });
+    } catch (_) {
+      await controller.dispose();
+      if (mounted) {
+        setState(() {
+          _isPreviewLoading = false;
+        });
+      }
+    }
   }
 
   Widget _buildAnalysisCard() {
@@ -989,6 +1264,7 @@ class DemoClip {
     required this.duration,
     required this.accent,
     required this.tag,
+    this.filePath,
   });
 
   final String title;
@@ -996,6 +1272,25 @@ class DemoClip {
   final String duration;
   final Color accent;
   final String tag;
+  final String? filePath;
+
+  DemoClip copyWith({
+    String? title,
+    String? location,
+    String? duration,
+    Color? accent,
+    String? tag,
+    String? filePath,
+  }) {
+    return DemoClip(
+      title: title ?? this.title,
+      location: location ?? this.location,
+      duration: duration ?? this.duration,
+      accent: accent ?? this.accent,
+      tag: tag ?? this.tag,
+      filePath: filePath ?? this.filePath,
+    );
+  }
 }
 
 class EnhancementPreset {
