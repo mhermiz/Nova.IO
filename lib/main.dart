@@ -53,6 +53,8 @@ class VideoEnhancerHomePage extends StatefulWidget {
 
 class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
   final List<DemoClip> _clips = [];
+  final GlobalKey _previewSectionKey = GlobalKey();
+  final ScrollController _scrollController = ScrollController();
 
   final List<EnhancementPreset> _presets = const [
     EnhancementPreset(
@@ -92,6 +94,7 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
   VideoPlayerController? _videoController;
   bool _isPreviewLoading = false;
   final Map<String, Uint8List> _clipThumbnails = {};
+  bool _showPreviewJumpButton = false;
 
   DemoClip? get _selectedClip =>
       _clips.isEmpty ? null : _clips[_selectedClipIndex];
@@ -100,11 +103,15 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
   @override
   void initState() {
     super.initState();
+    _scrollController.addListener(_handleScroll);
+    WidgetsBinding.instance.addPostFrameCallback((_) => _handleScroll());
     _syncPreviewController();
   }
 
   @override
   void dispose() {
+    _scrollController.removeListener(_handleScroll);
+    _scrollController.dispose();
     _videoController?.dispose();
     super.dispose();
   }
@@ -195,6 +202,49 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
     );
   }
 
+  Future<void> _jumpToPreview() async {
+    final previewContext = _previewSectionKey.currentContext;
+    if (previewContext == null) {
+      return;
+    }
+
+    await Scrollable.ensureVisible(
+      previewContext,
+      duration: const Duration(milliseconds: 450),
+      curve: Curves.easeOutCubic,
+      alignment: 0.05,
+    );
+  }
+
+  void _handleScroll() {
+    final previewContext = _previewSectionKey.currentContext;
+    if (previewContext == null) {
+      return;
+    }
+
+    final renderBox = previewContext.findRenderObject() as RenderBox?;
+    if (renderBox == null || !renderBox.hasSize) {
+      return;
+    }
+
+    final topOffset = renderBox.localToGlobal(Offset.zero).dy;
+    final shouldShowButton = topOffset < -(renderBox.size.height * 0.5);
+
+    if (shouldShowButton == _showPreviewJumpButton || !mounted) {
+      return;
+    }
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || shouldShowButton == _showPreviewJumpButton) {
+        return;
+      }
+
+      setState(() {
+        _showPreviewJumpButton = shouldShowButton;
+      });
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     final isWide = MediaQuery.of(context).size.width >= 980;
@@ -213,64 +263,95 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
           ),
         ),
         child: SafeArea(
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.all(20),
-            child: Center(
-              child: ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 1320),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    _buildHeroSection(context),
-                    const SizedBox(height: 20),
-                    if (isWide)
-                      Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Expanded(
-                            flex: 7,
-                            child: Column(
-                              children: [
-                                _buildPreviewCard(context),
-                                const SizedBox(height: 20),
-                                _buildClipShelf(),
-                              ],
-                            ),
-                          ),
-                          const SizedBox(width: 20),
-                          Expanded(
-                            flex: 5,
-                            child: Column(
-                              children: [
-                                _buildAnalysisCard(),
-                                const SizedBox(height: 20),
-                                _buildPresetCard(),
-                                const SizedBox(height: 20),
-                                _buildAdjustmentsCard(),
-                                const SizedBox(height: 20),
-                                _buildExportCard(),
-                              ],
-                            ),
-                          ),
+          child: Stack(
+            children: [
+              SingleChildScrollView(
+                controller: _scrollController,
+                padding: const EdgeInsets.all(20),
+                child: Center(
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 1320),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        _buildHeroSection(context),
+                        const SizedBox(height: 20),
+                        if (isWide)
+                          Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Expanded(
+                                flex: 7,
+                                child: Column(
+                                  children: [
+                                    _buildPreviewCard(context),
+                                    const SizedBox(height: 20),
+                                    _buildClipShelf(),
+                                  ],
+                                ),
+                              ),
+                              const SizedBox(width: 20),
+                              Expanded(
+                                flex: 5,
+                                child: Column(
+                                  children: [
+                                    _buildAnalysisCard(),
+                                    const SizedBox(height: 20),
+                                    _buildPresetCard(),
+                                    const SizedBox(height: 20),
+                                    _buildAdjustmentsCard(),
+                                    const SizedBox(height: 20),
+                                    _buildExportCard(),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          )
+                        else ...[
+                          _buildPreviewCard(context),
+                          const SizedBox(height: 20),
+                          _buildClipShelf(),
+                          const SizedBox(height: 20),
+                          _buildAnalysisCard(),
+                          const SizedBox(height: 20),
+                          _buildPresetCard(),
+                          const SizedBox(height: 20),
+                          _buildAdjustmentsCard(),
+                          const SizedBox(height: 20),
+                          _buildExportCard(),
                         ],
-                      )
-                    else ...[
-                      _buildPreviewCard(context),
-                      const SizedBox(height: 20),
-                      _buildClipShelf(),
-                      const SizedBox(height: 20),
-                      _buildAnalysisCard(),
-                      const SizedBox(height: 20),
-                      _buildPresetCard(),
-                      const SizedBox(height: 20),
-                      _buildAdjustmentsCard(),
-                      const SizedBox(height: 20),
-                      _buildExportCard(),
-                    ],
-                  ],
+                        const SizedBox(height: 88),
+                      ],
+                    ),
+                  ),
                 ),
               ),
-            ),
+              Positioned(
+                left: 20,
+                right: 20,
+                bottom: 16,
+                child: IgnorePointer(
+                  ignoring: !_showPreviewJumpButton,
+                  child: AnimatedOpacity(
+                    duration: const Duration(milliseconds: 180),
+                    opacity: _showPreviewJumpButton ? 1 : 0,
+                    child: Center(
+                      child: FilledButton.icon(
+                        onPressed: _jumpToPreview,
+                        icon: const Icon(Icons.visibility_rounded),
+                        label: const Text('Back To Preview'),
+                        style: FilledButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 18,
+                            vertical: 14,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ],
           ),
         ),
       ),
@@ -323,7 +404,7 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
                   ),
                   const SizedBox(height: 18),
                   Text(
-                    'Craft a cleaner, sharper look before the real processing pipeline lands.',
+                    'Import Pipeline',
                     style: Theme.of(context).textTheme.headlineMedium?.copyWith(
                       fontWeight: FontWeight.w800,
                       height: 1.05,
@@ -331,7 +412,7 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
                   ),
                   const SizedBox(height: 12),
                   Text(
-                    'This rebuilt screen gives you a complete placeholder layout for import, preview, AI analysis, preset selection, manual color shaping, and export.',
+                    'Import your video below to add it to the import queue.',
                     style: Theme.of(context).textTheme.bodyLarge?.copyWith(
                       color: Colors.white70,
                       height: 1.5,
@@ -414,6 +495,7 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
   Widget _buildPreviewCard(BuildContext context) {
     final selectedClip = _selectedClip;
     return Card(
+      key: _previewSectionKey,
       child: Padding(
         padding: const EdgeInsets.all(22),
         child: Column(
@@ -468,6 +550,7 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
     final selectedClip = _selectedClip;
     final controller = _videoController;
     final hasVideo = controller != null && controller.value.isInitialized;
+    final hasSelectedClip = selectedClip != null;
 
     return AspectRatio(
       aspectRatio: hasVideo ? controller.value.aspectRatio : 16 / 9,
@@ -503,7 +586,7 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
                   child: SizedBox(
                     width: controller.value.size.width,
                     height: controller.value.size.height,
-                    child: VideoPlayer(controller),
+                    child: _buildFilteredVideo(controller),
                   ),
                 )
               else
@@ -535,90 +618,93 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
                     child: CircularProgressIndicator(),
                   ),
                 ),
-              Positioned(
-                top: 18,
-                left: 18,
-                child: Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 12,
-                    vertical: 8,
-                  ),
-                  decoration: BoxDecoration(
-                    color: Colors.black.withValues(alpha: 0.26),
-                    borderRadius: BorderRadius.circular(999),
-                  ),
-                  child: Text(
-                    hasVideo
-                        ? (_showAfter ? 'Imported Preview' : 'Original File')
-                        : (_showAfter ? 'Enhanced Preview' : 'Original Preview'),
-                    style: const TextStyle(fontWeight: FontWeight.w600),
-                  ),
-                ),
-              ),
-              Center(
-                child: GestureDetector(
-                  onTap: hasVideo
-                      ? () {
-                          setState(() {
-                            if (controller.value.isPlaying) {
-                              controller.pause();
-                            } else {
-                              controller.play();
-                            }
-                          });
-                        }
-                      : null,
+              if (hasSelectedClip)
+                Positioned(
+                  top: 18,
+                  left: 18,
                   child: Container(
-                    width: 78,
-                    height: 78,
-                    decoration: BoxDecoration(
-                      color: Colors.white.withValues(alpha: 0.12),
-                      shape: BoxShape.circle,
-                      border: Border.all(
-                        color: Colors.white.withValues(alpha: 0.18),
-                      ),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 8,
                     ),
-                    child: Icon(
-                      hasVideo && controller.value.isPlaying
-                          ? Icons.pause_rounded
-                          : Icons.play_arrow_rounded,
-                      size: 42,
+                    decoration: BoxDecoration(
+                      color: Colors.black.withValues(alpha: 0.26),
+                      borderRadius: BorderRadius.circular(999),
+                    ),
+                    child: Text(
+                      hasVideo
+                          ? (_showAfter ? 'Imported Preview' : 'Original File')
+                          : (_showAfter ? 'Enhanced Preview' : 'Original Preview'),
+                      style: const TextStyle(fontWeight: FontWeight.w600),
                     ),
                   ),
                 ),
-              ),
-              Positioned(
-                right: 18,
-                bottom: 18,
-                child: Container(
-                  padding: const EdgeInsets.all(14),
-                  decoration: BoxDecoration(
-                    color: Colors.black.withValues(alpha: 0.24),
-                    borderRadius: BorderRadius.circular(18),
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        hasVideo ? 'Imported file' : 'Preview gain',
-                        style: const TextStyle(color: Colors.white70),
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        hasVideo
-                            ? (selectedClip?.duration == '--:--'
-                                ? 'Ready'
-                                : selectedClip!.duration)
-                            : '+${(_qualityScore / 5).round()}%',
-                        style: const TextStyle(
-                          fontSize: 24,
-                          fontWeight: FontWeight.w800,
+              if (hasSelectedClip)
+                Center(
+                  child: GestureDetector(
+                    onTap: hasVideo
+                        ? () {
+                            setState(() {
+                              if (controller.value.isPlaying) {
+                                controller.pause();
+                              } else {
+                                controller.play();
+                              }
+                            });
+                          }
+                        : null,
+                    child: Container(
+                      width: 78,
+                      height: 78,
+                      decoration: BoxDecoration(
+                        color: Colors.white.withValues(alpha: 0.12),
+                        shape: BoxShape.circle,
+                        border: Border.all(
+                          color: Colors.white.withValues(alpha: 0.18),
                         ),
                       ),
-                    ],
+                      child: Icon(
+                        hasVideo && controller.value.isPlaying
+                            ? Icons.pause_rounded
+                            : Icons.play_arrow_rounded,
+                        size: 42,
+                      ),
+                    ),
                   ),
                 ),
-              ),
+              if (hasSelectedClip)
+                Positioned(
+                  right: 18,
+                  bottom: 18,
+                  child: Container(
+                    padding: const EdgeInsets.all(14),
+                    decoration: BoxDecoration(
+                      color: Colors.black.withValues(alpha: 0.24),
+                      borderRadius: BorderRadius.circular(18),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          hasVideo ? 'Imported file' : 'Preview gain',
+                          style: const TextStyle(color: Colors.white70),
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          hasVideo
+                              ? (selectedClip?.duration == '--:--'
+                                  ? 'Ready'
+                                  : selectedClip!.duration)
+                              : '+${(_qualityScore / 5).round()}%',
+                          style: const TextStyle(
+                            fontSize: 24,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
             ],
           ),
         ),
@@ -724,6 +810,100 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
         ),
       ),
     );
+  }
+
+  Widget _buildFilteredVideo(VideoPlayerController controller) {
+    final video = VideoPlayer(controller);
+    if (!_showAfter) {
+      return video;
+    }
+
+    return ColorFiltered(
+      colorFilter: ColorFilter.matrix(_buildAdjustmentMatrix()),
+      child: video,
+    );
+  }
+
+  List<double> _buildAdjustmentMatrix() {
+    final brightnessOffset = (_brightness - 50) * 2.2;
+    final contrastValue = 0.7 + (_contrast / 100) * 0.9;
+    final saturationValue = 0.35 + (_saturation / 100) * 1.3;
+    final warmthShift = (_warmth - 50) / 100 * 28;
+
+    final contrastMatrix = _contrastMatrix(
+      contrastValue,
+      translate: 128 * (1 - contrastValue),
+    );
+    final saturationMatrix = _saturationMatrix(saturationValue);
+    final warmthMatrix = _warmthMatrix(warmthShift);
+    final brightnessMatrix = _brightnessMatrix(brightnessOffset);
+
+    return _multiplyColorMatrices(
+      brightnessMatrix,
+      _multiplyColorMatrices(
+        warmthMatrix,
+        _multiplyColorMatrices(saturationMatrix, contrastMatrix),
+      ),
+    );
+  }
+
+  List<double> _brightnessMatrix(double offset) {
+    return [
+      1, 0, 0, 0, offset,
+      0, 1, 0, 0, offset,
+      0, 0, 1, 0, offset,
+      0, 0, 0, 1, 0,
+    ];
+  }
+
+  List<double> _contrastMatrix(double value, {double translate = 0}) {
+    return [
+      value, 0, 0, 0, translate,
+      0, value, 0, 0, translate,
+      0, 0, value, 0, translate,
+      0, 0, 0, 1, 0,
+    ];
+  }
+
+  List<double> _saturationMatrix(double value) {
+    const lumR = 0.2126;
+    const lumG = 0.7152;
+    const lumB = 0.0722;
+    final inv = 1 - value;
+
+    return [
+      lumR * inv + value, lumG * inv, lumB * inv, 0, 0,
+      lumR * inv, lumG * inv + value, lumB * inv, 0, 0,
+      lumR * inv, lumG * inv, lumB * inv + value, 0, 0,
+      0, 0, 0, 1, 0,
+    ];
+  }
+
+  List<double> _warmthMatrix(double shift) {
+    return [
+      1.0, 0, 0, 0, shift,
+      0, 1.0, 0, 0, 0,
+      0, 0, 1.0, 0, -shift,
+      0, 0, 0, 1, 0,
+    ];
+  }
+
+  List<double> _multiplyColorMatrices(List<double> a, List<double> b) {
+    final result = List<double>.filled(20, 0);
+
+    for (var row = 0; row < 4; row++) {
+      final rowOffset = row * 5;
+      for (var col = 0; col < 5; col++) {
+        result[rowOffset + col] =
+            a[rowOffset] * b[col] +
+            a[rowOffset + 1] * b[col + 5] +
+            a[rowOffset + 2] * b[col + 10] +
+            a[rowOffset + 3] * b[col + 15] +
+            (col == 4 ? a[rowOffset + 4] : 0);
+      }
+    }
+
+    return result;
   }
 
   Widget _buildClipThumbnail(DemoClip clip) {
