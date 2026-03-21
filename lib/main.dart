@@ -84,7 +84,7 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
   ];
 
   int _selectedClipIndex = 0;
-  int _selectedPresetIndex = 0;
+  int _selectedPresetIndex = -1;
   bool _showAfter = true;
   bool _isAnalyzing = false;
   double _brightness = 54;
@@ -98,7 +98,8 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
 
   DemoClip? get _selectedClip =>
       _clips.isEmpty ? null : _clips[_selectedClipIndex];
-  EnhancementPreset get _selectedPreset => _presets[_selectedPresetIndex];
+  EnhancementPreset? get _selectedPreset =>
+      _selectedPresetIndex >= 0 ? _presets[_selectedPresetIndex] : null;
 
   @override
   void initState() {
@@ -122,9 +123,32 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
         (_contrast * 0.29) +
         (_saturation * 0.25) +
         (_warmth * 0.15) +
-        ((_selectedPresetIndex + 1) * 2.7) +
+        (((_selectedPresetIndex + 1).clamp(0, _presets.length)) * 2.7) +
         ((_selectedClipIndex + 1) * 1.8);
     return weightedScore.clamp(0, 100).round();
+  }
+
+  void _clearPreset() {
+    setState(() {
+      _selectedPresetIndex = -1;
+    });
+  }
+
+  void _applyPreset(int presetIndex) {
+    final settings = switch (presetIndex) {
+      0 => (brightness: 52.0, contrast: 58.0, saturation: 54.0, warmth: 49.0),
+      1 => (brightness: 46.0, contrast: 76.0, saturation: 62.0, warmth: 58.0),
+      2 => (brightness: 56.0, contrast: 66.0, saturation: 78.0, warmth: 52.0),
+      _ => (brightness: 68.0, contrast: 52.0, saturation: 48.0, warmth: 60.0),
+    };
+
+    setState(() {
+      _selectedPresetIndex = presetIndex;
+      _brightness = settings.brightness;
+      _contrast = settings.contrast;
+      _saturation = settings.saturation;
+      _warmth = settings.warmth;
+    });
   }
 
   Future<void> _runAiAnalysis() async {
@@ -147,9 +171,9 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
     };
 
     setState(() {
-      _selectedPresetIndex = presetIndex;
       _isAnalyzing = false;
     });
+    _applyPreset(presetIndex);
 
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
@@ -447,7 +471,10 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
                     selectedClip?.title ?? 'No clip selected',
                   ),
                   const SizedBox(height: 12),
-                  _buildMetricTile('Preset', _selectedPreset.title),
+                  _buildMetricTile(
+                    'Preset',
+                    _selectedPreset?.title ?? 'No preset',
+                  ),
                   const SizedBox(height: 12),
                   _buildMetricTile('Quality score', '$_qualityScore / 100'),
                 ],
@@ -551,6 +578,10 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
     final controller = _videoController;
     final hasVideo = controller != null && controller.value.isInitialized;
     final hasSelectedClip = selectedClip != null;
+    final showBalancedOverlay = _showAfter && _selectedPresetIndex == 0;
+    final showCinematicOverlay = _showAfter && _selectedPresetIndex == 1;
+    final showVividOverlay = _showAfter && _selectedPresetIndex == 2;
+    final showLowLightOverlay = _showAfter && _selectedPresetIndex == 3;
 
     return AspectRatio(
       aspectRatio: hasVideo ? controller.value.aspectRatio : 16 / 9,
@@ -611,6 +642,22 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
                       ),
                     ),
                   ),
+              if (showBalancedOverlay)
+                IgnorePointer(
+                  child: _buildBalancedPresetOverlay(),
+                ),
+              if (showCinematicOverlay)
+                IgnorePointer(
+                  child: _buildCinematicPresetOverlay(),
+                ),
+              if (showVividOverlay)
+                IgnorePointer(
+                  child: _buildVividPresetOverlay(),
+                ),
+              if (showLowLightOverlay)
+                IgnorePointer(
+                  child: _buildLowLightPresetOverlay(),
+                ),
               if (_isPreviewLoading)
                 Container(
                   color: Colors.black.withValues(alpha: 0.32),
@@ -692,9 +739,9 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
                         const SizedBox(height: 8),
                         Text(
                           hasVideo
-                              ? (selectedClip?.duration == '--:--'
+                              ? (selectedClip.duration == '--:--'
                                   ? 'Ready'
-                                  : selectedClip!.duration)
+                                  : selectedClip.duration)
                               : '+${(_qualityScore / 5).round()}%',
                           style: const TextStyle(
                             fontSize: 24,
@@ -821,6 +868,128 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
     return ColorFiltered(
       colorFilter: ColorFilter.matrix(_buildAdjustmentMatrix()),
       child: video,
+    );
+  }
+
+  Widget _buildBalancedPresetOverlay() {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [
+            Colors.white.withValues(alpha: 0.08),
+            Colors.transparent,
+            const Color(0xFF09111F).withValues(alpha: 0.12),
+          ],
+          stops: const [0, 0.45, 1],
+        ),
+      ),
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          gradient: RadialGradient(
+            center: Alignment.center,
+            radius: 1.08,
+            colors: [
+              Colors.transparent,
+              const Color(0xFF09111F).withValues(alpha: 0.06),
+            ],
+            stops: const [0.72, 1],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildCinematicPresetOverlay() {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [
+            const Color(0xFFFFB27A).withValues(alpha: 0.12),
+            Colors.transparent,
+            const Color(0xFF060A14).withValues(alpha: 0.32),
+          ],
+          stops: const [0, 0.38, 1],
+        ),
+      ),
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          gradient: RadialGradient(
+            center: Alignment.center,
+            radius: 1.05,
+            colors: [
+              Colors.transparent,
+              const Color(0xFF060A14).withValues(alpha: 0.22),
+            ],
+            stops: const [0.58, 1],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildVividPresetOverlay() {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            const Color(0xFF78D9FF).withValues(alpha: 0.12),
+            Colors.transparent,
+            const Color(0xFF6EFFC6).withValues(alpha: 0.10),
+          ],
+          stops: const [0, 0.52, 1],
+        ),
+      ),
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          gradient: RadialGradient(
+            center: Alignment.topCenter,
+            radius: 1.15,
+            colors: [
+              Colors.white.withValues(alpha: 0.06),
+              Colors.transparent,
+              const Color(0xFF06101A).withValues(alpha: 0.12),
+            ],
+            stops: const [0, 0.46, 1],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildLowLightPresetOverlay() {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [
+            Colors.white.withValues(alpha: 0.04),
+            const Color(0xFF8FC8FF).withValues(alpha: 0.06),
+            Colors.transparent,
+          ],
+          stops: const [0, 0.34, 1],
+        ),
+      ),
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          gradient: RadialGradient(
+            center: Alignment.center,
+            radius: 1.18,
+            colors: [
+              Colors.white.withValues(alpha: 0.08),
+              Colors.transparent,
+              const Color(0xFF09111F).withValues(alpha: 0.10),
+            ],
+            stops: const [0, 0.50, 1],
+          ),
+        ),
+      ),
     );
   }
 
@@ -1168,6 +1337,8 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
               style: TextStyle(fontSize: 24, fontWeight: FontWeight.w800),
             ),
             const SizedBox(height: 18),
+            _buildNoPresetOption(),
+            const SizedBox(height: 12),
             ...List.generate(_presets.length, (index) {
               final preset = _presets[index];
               final isSelected = index == _selectedPresetIndex;
@@ -1177,9 +1348,7 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
                 ),
                 child: InkWell(
                   onTap: () {
-                    setState(() {
-                      _selectedPresetIndex = index;
-                    });
+                    _applyPreset(index);
                   },
                   borderRadius: BorderRadius.circular(20),
                   child: Container(
@@ -1238,6 +1407,43 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
     );
   }
 
+  Widget _buildNoPresetOption() {
+    final isSelected = _selectedPresetIndex == -1;
+    return InkWell(
+      onTap: _clearPreset,
+      borderRadius: BorderRadius.circular(18),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(18),
+          color: isSelected
+              ? Colors.white.withValues(alpha: 0.10)
+              : Colors.white.withValues(alpha: 0.04),
+          border: Border.all(
+            color: isSelected ? Colors.white70 : const Color(0xFF22324D),
+          ),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.block_rounded, size: 18, color: Colors.white70),
+            const SizedBox(width: 10),
+            const Text(
+              'No Preset',
+              style: TextStyle(
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+            if (isSelected) ...[
+              const SizedBox(width: 10),
+              const Icon(Icons.check_circle_rounded, size: 18),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _buildAdjustmentsCard() {
     return Card(
       child: Padding(
@@ -1251,7 +1457,7 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
             ),
             const SizedBox(height: 8),
             const Text(
-              'These sliders are still demo controls, but the layout is ready for real processing values.',
+              'Adjust the video accordingly to how you prefer. Use the sliders the below to get a specific value.',
               style: TextStyle(color: Colors.white60, height: 1.5),
             ),
             const SizedBox(height: 18),
