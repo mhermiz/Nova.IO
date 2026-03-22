@@ -91,6 +91,7 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
   double _contrast = 61;
   double _saturation = 58;
   double _warmth = 46;
+  double _presetStrength = 0.85;
   VideoPlayerController? _videoController;
   bool _isPreviewLoading = false;
   final Map<String, Uint8List> _clipThumbnails = {};
@@ -136,10 +137,10 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
 
   void _applyPreset(int presetIndex) {
     final settings = switch (presetIndex) {
-      0 => (brightness: 52.0, contrast: 58.0, saturation: 54.0, warmth: 49.0),
-      1 => (brightness: 46.0, contrast: 76.0, saturation: 62.0, warmth: 58.0),
-      2 => (brightness: 56.0, contrast: 66.0, saturation: 78.0, warmth: 52.0),
-      _ => (brightness: 68.0, contrast: 52.0, saturation: 48.0, warmth: 60.0),
+      0 => (brightness: 51.0, contrast: 61.0, saturation: 52.0, warmth: 50.0),
+      1 => (brightness: 44.0, contrast: 78.0, saturation: 58.0, warmth: 61.0),
+      2 => (brightness: 58.0, contrast: 72.0, saturation: 84.0, warmth: 48.0),
+      _ => (brightness: 70.0, contrast: 48.0, saturation: 44.0, warmth: 57.0),
     };
 
     setState(() {
@@ -148,6 +149,7 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
       _contrast = settings.contrast;
       _saturation = settings.saturation;
       _warmth = settings.warmth;
+      _presetStrength = 0.85;
     });
   }
 
@@ -872,124 +874,256 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
   }
 
   Widget _buildBalancedPresetOverlay() {
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-          colors: [
-            Colors.white.withValues(alpha: 0.08),
-            Colors.transparent,
-            const Color(0xFF09111F).withValues(alpha: 0.12),
-          ],
-          stops: const [0, 0.45, 1],
-        ),
-      ),
-      child: DecoratedBox(
-        decoration: BoxDecoration(
-          gradient: RadialGradient(
-            center: Alignment.center,
-            radius: 1.08,
-            colors: [
-              Colors.transparent,
-              const Color(0xFF09111F).withValues(alpha: 0.06),
-            ],
-            stops: const [0.72, 1],
+    final strength = _presetStrength;
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        DecoratedBox(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+              colors: [
+                Colors.white.withValues(alpha: 0.09 * strength),
+                Colors.white.withValues(alpha: 0.02 * strength),
+                const Color(0xFF09111F).withValues(alpha: 0.08 * strength),
+              ],
+              stops: const [0, 0.48, 1],
+            ),
           ),
         ),
-      ),
+        DecoratedBox(
+          decoration: BoxDecoration(
+            gradient: RadialGradient(
+              center: Alignment.center,
+              radius: 1.06,
+              colors: [
+                Colors.transparent,
+                const Color(0xFF09111F).withValues(alpha: 0.05 * strength),
+              ],
+              stops: const [0.76, 1],
+            ),
+          ),
+        ),
+        Align(
+          alignment: const Alignment(0, -0.82),
+          child: Container(
+            width: 220,
+            height: 82,
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(999),
+              gradient: RadialGradient(
+                colors: [
+                  Colors.white.withValues(alpha: 0.10 * strength),
+                  Colors.white.withValues(alpha: 0.03 * strength),
+                  Colors.transparent,
+                ],
+                stops: const [0, 0.42, 1],
+              ),
+            ),
+          ),
+        ),
+        Align(
+          alignment: const Alignment(0, -0.54),
+          child: Container(
+            width: 260,
+            height: 120,
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(999),
+              gradient: RadialGradient(
+                colors: [
+                  Colors.white.withValues(alpha: 0.06 * strength),
+                  Colors.white.withValues(alpha: 0.015 * strength),
+                  Colors.transparent,
+                ],
+                stops: const [0, 0.36, 1],
+              ),
+            ),
+          ),
+        ),
+      ],
     );
   }
 
   Widget _buildCinematicPresetOverlay() {
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-          colors: [
-            const Color(0xFFFFB27A).withValues(alpha: 0.12),
-            Colors.transparent,
-            const Color(0xFF060A14).withValues(alpha: 0.32),
-          ],
-          stops: const [0, 0.38, 1],
-        ),
-      ),
-      child: DecoratedBox(
-        decoration: BoxDecoration(
-          gradient: RadialGradient(
-            center: Alignment.center,
-            radius: 1.05,
-            colors: [
-              Colors.transparent,
-              const Color(0xFF060A14).withValues(alpha: 0.22),
-            ],
-            stops: const [0.58, 1],
+    final strength = _presetStrength;
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        DecoratedBox(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+              colors: [
+                const Color(0xFFFFB27A).withValues(alpha: 0.14 * strength),
+                Colors.transparent,
+                const Color(0xFF060A14).withValues(alpha: 0.34 * strength),
+              ],
+              stops: const [0, 0.36, 1],
+            ),
           ),
         ),
-      ),
+        DecoratedBox(
+          decoration: BoxDecoration(
+            gradient: RadialGradient(
+              center: Alignment.center,
+              radius: 1.02,
+              colors: [
+                Colors.transparent,
+                const Color(0xFF060A14).withValues(alpha: 0.26 * strength),
+              ],
+              stops: const [0.54, 1],
+            ),
+          ),
+        ),
+        Align(
+          alignment: const Alignment(0, -0.78),
+          child: Container(
+            width: 260,
+            height: 96,
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(999),
+              gradient: RadialGradient(
+                colors: [
+                  const Color(0xFFFFC38E).withValues(alpha: 0.14 * strength),
+                  const Color(0xFFFFC38E).withValues(alpha: 0.05 * strength),
+                  Colors.transparent,
+                ],
+                stops: const [0, 0.42, 1],
+              ),
+            ),
+          ),
+        ),
+        Align(
+          alignment: const Alignment(0, -0.18),
+          child: Container(
+            width: 300,
+            height: 180,
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(999),
+              gradient: RadialGradient(
+                colors: [
+                  const Color(0xFFFFD2A8).withValues(alpha: 0.08 * strength),
+                  const Color(0xFFFFD2A8).withValues(alpha: 0.025 * strength),
+                  Colors.transparent,
+                ],
+                stops: const [0, 0.34, 1],
+              ),
+            ),
+          ),
+        ),
+      ],
     );
   }
 
   Widget _buildVividPresetOverlay() {
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [
-            const Color(0xFF78D9FF).withValues(alpha: 0.12),
-            Colors.transparent,
-            const Color(0xFF6EFFC6).withValues(alpha: 0.10),
-          ],
-          stops: const [0, 0.52, 1],
-        ),
-      ),
-      child: DecoratedBox(
-        decoration: BoxDecoration(
-          gradient: RadialGradient(
-            center: Alignment.topCenter,
-            radius: 1.15,
-            colors: [
-              Colors.white.withValues(alpha: 0.06),
-              Colors.transparent,
-              const Color(0xFF06101A).withValues(alpha: 0.12),
-            ],
-            stops: const [0, 0.46, 1],
+    final strength = _presetStrength;
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        DecoratedBox(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [
+                const Color(0xFF78D9FF).withValues(alpha: 0.13 * strength),
+                Colors.transparent,
+                const Color(0xFF6EFFC6).withValues(alpha: 0.12 * strength),
+              ],
+              stops: const [0, 0.50, 1],
+            ),
           ),
         ),
-      ),
+        DecoratedBox(
+          decoration: BoxDecoration(
+            gradient: RadialGradient(
+              center: Alignment.topCenter,
+              radius: 1.12,
+              colors: [
+                Colors.white.withValues(alpha: 0.07 * strength),
+                Colors.transparent,
+                const Color(0xFF06101A).withValues(alpha: 0.10 * strength),
+              ],
+              stops: const [0, 0.42, 1],
+            ),
+          ),
+        ),
+        Align(
+          alignment: const Alignment(0.58, -0.36),
+          child: Container(
+            width: 180,
+            height: 120,
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(999),
+              gradient: RadialGradient(
+                colors: [
+                  Colors.white.withValues(alpha: 0.08 * strength),
+                  const Color(0xFF95F6FF).withValues(alpha: 0.03 * strength),
+                  Colors.transparent,
+                ],
+                stops: const [0, 0.34, 1],
+              ),
+            ),
+          ),
+        ),
+      ],
     );
   }
 
   Widget _buildLowLightPresetOverlay() {
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-          colors: [
-            Colors.white.withValues(alpha: 0.04),
-            const Color(0xFF8FC8FF).withValues(alpha: 0.06),
-            Colors.transparent,
-          ],
-          stops: const [0, 0.34, 1],
-        ),
-      ),
-      child: DecoratedBox(
-        decoration: BoxDecoration(
-          gradient: RadialGradient(
-            center: Alignment.center,
-            radius: 1.18,
-            colors: [
-              Colors.white.withValues(alpha: 0.08),
-              Colors.transparent,
-              const Color(0xFF09111F).withValues(alpha: 0.10),
-            ],
-            stops: const [0, 0.50, 1],
+    final strength = _presetStrength;
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        DecoratedBox(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+              colors: [
+                Colors.white.withValues(alpha: 0.05 * strength),
+                const Color(0xFF8FC8FF).withValues(alpha: 0.08 * strength),
+                Colors.transparent,
+              ],
+              stops: const [0, 0.30, 1],
+            ),
           ),
         ),
-      ),
+        DecoratedBox(
+          decoration: BoxDecoration(
+            gradient: RadialGradient(
+              center: Alignment.center,
+              radius: 1.14,
+              colors: [
+                Colors.white.withValues(alpha: 0.09 * strength),
+                Colors.transparent,
+                const Color(0xFF09111F).withValues(alpha: 0.08 * strength),
+              ],
+              stops: const [0, 0.48, 1],
+            ),
+          ),
+        ),
+        Align(
+          alignment: const Alignment(0, -0.10),
+          child: Container(
+            width: 280,
+            height: 180,
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(999),
+              gradient: RadialGradient(
+                colors: [
+                  Colors.white.withValues(alpha: 0.08 * strength),
+                  const Color(0xFFB6DCFF).withValues(alpha: 0.03 * strength),
+                  Colors.transparent,
+                ],
+                stops: const [0, 0.34, 1],
+              ),
+            ),
+          ),
+        ),
+      ],
     );
   }
 
@@ -998,6 +1132,16 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
     final contrastValue = 0.7 + (_contrast / 100) * 0.9;
     final saturationValue = 0.35 + (_saturation / 100) * 1.3;
     final warmthShift = (_warmth - 50) / 100 * 28;
+    final presetStrength = _showAfter ? _presetStrength : 0.0;
+    final clarityBoost = switch (_selectedPresetIndex) {
+      0 when _showAfter => 1.0 + (0.05 * presetStrength),
+      2 when _showAfter => 1.0 + (0.08 * presetStrength),
+      _ => 1.0,
+    };
+    final cinematicFade =
+        _showAfter && _selectedPresetIndex == 1 ? 10.0 * presetStrength : 0.0;
+    final lowLightLift =
+        _showAfter && _selectedPresetIndex == 3 ? 8.0 * presetStrength : 0.0;
 
     final contrastMatrix = _contrastMatrix(
       contrastValue,
@@ -1006,12 +1150,27 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
     final saturationMatrix = _saturationMatrix(saturationValue);
     final warmthMatrix = _warmthMatrix(warmthShift);
     final brightnessMatrix = _brightnessMatrix(brightnessOffset);
+    final clarityMatrix = _contrastMatrix(
+      clarityBoost,
+      translate: 128 * (1 - clarityBoost),
+    );
+    final fadeMatrix = _brightnessMatrix(cinematicFade);
+    final lowLightLiftMatrix = _brightnessMatrix(lowLightLift);
 
     return _multiplyColorMatrices(
-      brightnessMatrix,
+      lowLightLiftMatrix,
       _multiplyColorMatrices(
-        warmthMatrix,
-        _multiplyColorMatrices(saturationMatrix, contrastMatrix),
+        fadeMatrix,
+        _multiplyColorMatrices(
+          clarityMatrix,
+          _multiplyColorMatrices(
+            brightnessMatrix,
+            _multiplyColorMatrices(
+              warmthMatrix,
+              _multiplyColorMatrices(saturationMatrix, contrastMatrix),
+            ),
+          ),
+        ),
       ),
     );
   }
@@ -1401,6 +1560,18 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
                 ),
               );
             }),
+            if (_selectedPresetIndex >= 0) ...[
+              const SizedBox(height: 18),
+              _buildSlider(
+                label: 'Preset Strength',
+                value: _presetStrength * 100,
+                onChanged: (value) {
+                  setState(() {
+                    _presetStrength = value / 100;
+                  });
+                },
+              ),
+            ],
           ],
         ),
       ),
