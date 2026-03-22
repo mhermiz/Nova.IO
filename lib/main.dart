@@ -91,6 +91,8 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
   double _contrast = 61;
   double _saturation = 58;
   double _warmth = 46;
+  double _highlights = 52;
+  double _shadows = 48;
   double _presetStrength = 0.85;
   VideoPlayerController? _videoController;
   bool _isPreviewLoading = false;
@@ -142,6 +144,12 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
       2 => (brightness: 58.0, contrast: 72.0, saturation: 84.0, warmth: 48.0),
       _ => (brightness: 70.0, contrast: 48.0, saturation: 44.0, warmth: 57.0),
     };
+    final tonal = switch (presetIndex) {
+      0 => (highlights: 48.0, shadows: 50.0),
+      1 => (highlights: 42.0, shadows: 40.0),
+      2 => (highlights: 58.0, shadows: 52.0),
+      _ => (highlights: 38.0, shadows: 72.0),
+    };
 
     setState(() {
       _selectedPresetIndex = presetIndex;
@@ -149,6 +157,8 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
       _contrast = settings.contrast;
       _saturation = settings.saturation;
       _warmth = settings.warmth;
+      _highlights = tonal.highlights;
+      _shadows = tonal.shadows;
       _presetStrength = 0.85;
     });
   }
@@ -352,31 +362,12 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
                   ),
                 ),
               ),
-              Positioned(
-                left: 20,
-                right: 20,
-                bottom: 16,
-                child: IgnorePointer(
-                  ignoring: !_showPreviewJumpButton,
-                  child: AnimatedOpacity(
-                    duration: const Duration(milliseconds: 180),
-                    opacity: _showPreviewJumpButton ? 1 : 0,
-                    child: Center(
-                      child: FilledButton.icon(
-                        onPressed: _jumpToPreview,
-                        icon: const Icon(Icons.visibility_rounded),
-                        label: const Text('Back To Preview'),
-                        style: FilledButton.styleFrom(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 18,
-                            vertical: 14,
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
+              if (_showPreviewJumpButton && _selectedClip != null)
+                Positioned(
+                  top: 16,
+                  left: 16,
+                  child: _buildMiniPreviewOverlay(),
                 ),
-              ),
             ],
           ),
         ),
@@ -774,7 +765,7 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
             ),
             const SizedBox(height: 8),
             const Text(
-              'Pick the placeholder clip you want to shape.',
+              'Pick the video clip you want to shape.',
               style: TextStyle(color: Colors.white60),
             ),
             const SizedBox(height: 18),
@@ -870,6 +861,111 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
     return ColorFiltered(
       colorFilter: ColorFilter.matrix(_buildAdjustmentMatrix()),
       child: video,
+    );
+  }
+
+  Widget _buildMiniPreviewOverlay() {
+    final selectedClip = _selectedClip;
+    final controller = _videoController;
+    final hasVideo = controller != null && controller.value.isInitialized;
+
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: _jumpToPreview,
+        borderRadius: BorderRadius.circular(22),
+        child: Ink(
+          width: 184,
+          decoration: BoxDecoration(
+            color: const Color(0xFF101A2B).withValues(alpha: 0.96),
+            borderRadius: BorderRadius.circular(22),
+            border: Border.all(color: const Color(0xFF2A3C5E)),
+            boxShadow: const [
+              BoxShadow(
+                color: Color(0x66000000),
+                blurRadius: 18,
+                offset: Offset(0, 10),
+              ),
+            ],
+          ),
+          child: Padding(
+            padding: const EdgeInsets.all(10),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(16),
+                  child: SizedBox(
+                    height: 96,
+                    width: double.infinity,
+                    child: hasVideo
+                        ? FittedBox(
+                            fit: BoxFit.cover,
+                            child: SizedBox(
+                              width: controller.value.size.width,
+                              height: controller.value.size.height,
+                              child: _buildFilteredVideo(controller),
+                            ),
+                          )
+                        : _buildMiniPreviewFallback(selectedClip),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                Text(
+                  selectedClip?.title ?? 'Preview',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontWeight: FontWeight.w700,
+                    fontSize: 13,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  'Tap to return to preview',
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: Colors.white.withValues(alpha: 0.72),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildMiniPreviewFallback(DemoClip? selectedClip) {
+    if (selectedClip == null) {
+      return Container(
+        color: const Color(0xFF13213A),
+      );
+    }
+
+    final filePath = selectedClip.filePath;
+    final thumbnailBytes =
+        filePath == null ? null : _clipThumbnails[filePath];
+
+    if (thumbnailBytes != null) {
+      return Image.memory(
+        thumbnailBytes,
+        fit: BoxFit.cover,
+      );
+    }
+
+    return Container(
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: [
+            selectedClip.accent.withValues(alpha: 0.55),
+            const Color(0xFF101B2D),
+          ],
+        ),
+      ),
+      child: const Center(
+        child: Icon(Icons.video_collection_rounded, size: 28),
+      ),
     );
   }
 
@@ -1132,6 +1228,8 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
     final contrastValue = 0.7 + (_contrast / 100) * 0.9;
     final saturationValue = 0.35 + (_saturation / 100) * 1.3;
     final warmthShift = (_warmth - 50) / 100 * 28;
+    final highlightsOffset = (50 - _highlights) * 0.8;
+    final shadowsOffset = (_shadows - 50) * 0.7;
     final presetStrength = _showAfter ? _presetStrength : 0.0;
     final clarityBoost = switch (_selectedPresetIndex) {
       0 when _showAfter => 1.0 + (0.05 * presetStrength),
@@ -1156,18 +1254,26 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
     );
     final fadeMatrix = _brightnessMatrix(cinematicFade);
     final lowLightLiftMatrix = _brightnessMatrix(lowLightLift);
+    final highlightsMatrix = _brightnessMatrix(highlightsOffset);
+    final shadowsMatrix = _brightnessMatrix(shadowsOffset);
 
     return _multiplyColorMatrices(
-      lowLightLiftMatrix,
+      highlightsMatrix,
       _multiplyColorMatrices(
-        fadeMatrix,
+        shadowsMatrix,
         _multiplyColorMatrices(
-          clarityMatrix,
+          lowLightLiftMatrix,
           _multiplyColorMatrices(
-            brightnessMatrix,
+            fadeMatrix,
             _multiplyColorMatrices(
-              warmthMatrix,
-              _multiplyColorMatrices(saturationMatrix, contrastMatrix),
+              clarityMatrix,
+              _multiplyColorMatrices(
+                brightnessMatrix,
+                _multiplyColorMatrices(
+                  warmthMatrix,
+                  _multiplyColorMatrices(saturationMatrix, contrastMatrix),
+                ),
+              ),
             ),
           ),
         ),
@@ -1651,6 +1757,16 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
               label: 'Warmth',
               value: _warmth,
               onChanged: (value) => setState(() => _warmth = value),
+            ),
+            _buildSlider(
+              label: 'Highlights',
+              value: _highlights,
+              onChanged: (value) => setState(() => _highlights = value),
+            ),
+            _buildSlider(
+              label: 'Shadows',
+              value: _shadows,
+              onChanged: (value) => setState(() => _shadows = value),
             ),
           ],
         ),
