@@ -1,6 +1,5 @@
 import 'dart:io';
 import 'dart:typed_data';
-import 'dart:ui' as ui;
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
@@ -10,6 +9,11 @@ import 'helpers/analyzer_helper.dart';
 import 'helpers/color_grading.dart';
 import 'models/demo_clip.dart';
 import 'models/enhancement_preset.dart';
+import 'widgets/adjustments_card.dart';
+import 'widgets/analysis_card.dart';
+import 'widgets/preview_media.dart';
+import 'widgets/presets_card.dart';
+import 'widgets/video_effect_overlays.dart';
 import 'widgets/frame_painter.dart';
 import 'widgets/video_preview_card.dart';
 
@@ -173,21 +177,7 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
       _sceneOverride = flavor;
     });
   }
-
-  // Recommends a preset by combining sampled frame statistics with lighter scene/title hints.
-  //
-  // The scorer works like a simple weighted voting system:
-  // - each preset starts at 0
-  // - scene type adds a soft prior so auto/manual scene context can gently bias the result
-  // - sampled frame metrics add the strongest votes because they come from actual image data
-  // - title keywords only act as a fallback nudge when the filename clearly signals intent
-  // - the preset with the highest total wins
-  //
-  // Score slots map to presets in this order:
-  // 0 = Balanced
-  // 1 = Cinematic
-  // 2 = Vivid
-  // 3 = Low-Light Rescue
+  
   Future<({
     int presetIndex,
     int confidence,
@@ -680,7 +670,13 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
               child: SizedBox(
                 width: controller.value.size.width,
                 height: controller.value.size.height,
-                child: _buildFilteredVideo(controller),
+                child: FilteredPreviewMedia(
+                  controller: controller,
+                  showAfter: _showAfter,
+                  adjustmentMatrix: _buildAdjustmentMatrix(),
+                  selectedPresetIndex: _selectedPresetIndex,
+                  presetStrength: _presetStrength,
+                ),
               ),
             )
           : selectedClip != null
@@ -692,16 +688,28 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
             )
           : const EmptyPreviewMessage(),
       effectOverlays: [
-        if (showBalancedOverlay) IgnorePointer(child: _buildBalancedPresetOverlay()),
+        if (showBalancedOverlay)
+          IgnorePointer(child: BalancedPresetOverlay(strength: _presetStrength)),
         if (showCinematicOverlay)
-          IgnorePointer(child: _buildCinematicPresetOverlay()),
-        if (showVividOverlay) IgnorePointer(child: _buildVividPresetOverlay()),
+          IgnorePointer(child: CinematicPresetOverlay(strength: _presetStrength)),
+        if (showVividOverlay)
+          IgnorePointer(child: VividPresetOverlay(strength: _presetStrength)),
         if (showLowLightOverlay)
-          IgnorePointer(child: _buildLowLightPresetOverlay()),
+          IgnorePointer(child: LowLightPresetOverlay(strength: _presetStrength)),
         if (_showAfter && _selectedPresetIndex >= 0)
-          IgnorePointer(child: _buildSelectiveColorOverlay()),
+          IgnorePointer(
+            child: SelectiveColorOverlay(
+              presetIndex: _selectedPresetIndex,
+              strength: _presetStrength,
+            ),
+          ),
         if (_showAfter && selectedClip != null)
-          IgnorePointer(child: _buildSceneAwareOverlay()),
+          IgnorePointer(
+            child: SceneAwareOverlay(
+              sceneFlavor: _currentSceneFlavor,
+              strength: _presetStrength,
+            ),
+          ),
       ],
       isPreviewLoading: _isPreviewLoading,
       onBackgroundTap: hasVideo
@@ -852,115 +860,6 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
     );
   }
 
-  Widget _buildFilteredVideo(VideoPlayerController controller) {
-    final video = VideoPlayer(controller);
-    if (!_showAfter) {
-      return video;
-    }
-
-    final gradedVideo = ColorFiltered(
-      colorFilter: ColorFilter.matrix(_buildAdjustmentMatrix()),
-      child: video,
-    );
-
-    return _buildSkinToneProtection(
-      _buildTextureTreatment(gradedVideo),
-    );
-  }
-
-  Widget _buildTextureTreatment(Widget gradedVideo) {
-    final strength = _presetStrength;
-
-    return switch (_selectedPresetIndex) {
-      1 => Stack(
-          fit: StackFit.expand,
-          children: [
-            gradedVideo,
-            Opacity(
-              opacity: 0.10 * strength,
-              child: ImageFiltered(
-                imageFilter: ui.ImageFilter.blur(
-                  sigmaX: 1.8 * strength,
-                  sigmaY: 1.8 * strength,
-                ),
-                child: gradedVideo,
-              ),
-            ),
-          ],
-        ),
-      2 => Stack(
-          fit: StackFit.expand,
-          children: [
-            gradedVideo,
-            DecoratedBox(
-              decoration: BoxDecoration(
-                border: Border.all(
-                  color: Colors.white.withValues(alpha: 0.045 * strength),
-                ),
-              ),
-            ),
-          ],
-        ),
-      3 => Stack(
-          fit: StackFit.expand,
-          children: [
-            gradedVideo,
-            Opacity(
-              opacity: 0.08 * strength,
-              child: ImageFiltered(
-                imageFilter: ui.ImageFilter.blur(
-                  sigmaX: 1.1 * strength,
-                  sigmaY: 1.1 * strength,
-                ),
-                child: gradedVideo,
-              ),
-            ),
-          ],
-        ),
-      _ => gradedVideo,
-    };
-  }
-
-  Widget _buildSkinToneProtection(Widget processedVideo) {
-    final strength = switch (_selectedPresetIndex) {
-      1 => 0.10 * _presetStrength,
-      2 => 0.08 * _presetStrength,
-      3 => 0.09 * _presetStrength,
-      _ => 0.04 * _presetStrength,
-    };
-
-    if (_selectedPresetIndex < 0 || strength <= 0) {
-      return processedVideo;
-    }
-
-    return Stack(
-      fit: StackFit.expand,
-      children: [
-        processedVideo,
-        IgnorePointer(
-          child: Align(
-            alignment: const Alignment(0, -0.08),
-            child: Container(
-              width: 230,
-              height: 230,
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(999),
-                gradient: RadialGradient(
-                  colors: [
-                    const Color(0xFFFFC39E).withValues(alpha: strength),
-                    const Color(0xFFF3B08A).withValues(alpha: strength * 0.45),
-                    Colors.transparent,
-                  ],
-                  stops: const [0, 0.36, 1],
-                ),
-              ),
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-
   Widget _buildMiniPreviewOverlay() {
     final selectedClip = _selectedClip;
     final controller = _videoController;
@@ -978,7 +877,13 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
               child: SizedBox(
                 width: controller.value.size.width,
                 height: controller.value.size.height,
-                child: _buildFilteredVideo(controller),
+                child: FilteredPreviewMedia(
+                  controller: controller,
+                  showAfter: _showAfter,
+                  adjustmentMatrix: _buildAdjustmentMatrix(),
+                  selectedPresetIndex: _selectedPresetIndex,
+                  presetStrength: _presetStrength,
+                ),
               ),
             )
           : MiniPreviewFallback(
@@ -986,552 +891,6 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
               accentColor: selectedClip?.accent,
             ),
     );
-  }
-
-  Widget _buildBalancedPresetOverlay() {
-    final strength = _presetStrength;
-    return Stack(
-      fit: StackFit.expand,
-      children: [
-        DecoratedBox(
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.topCenter,
-              end: Alignment.bottomCenter,
-              colors: [
-                Colors.white.withValues(alpha: 0.09 * strength),
-                Colors.white.withValues(alpha: 0.02 * strength),
-                const Color(0xFF09111F).withValues(alpha: 0.08 * strength),
-              ],
-              stops: const [0, 0.48, 1],
-            ),
-          ),
-        ),
-        DecoratedBox(
-          decoration: BoxDecoration(
-            gradient: RadialGradient(
-              center: Alignment.center,
-              radius: 1.06,
-              colors: [
-                Colors.transparent,
-                const Color(0xFF09111F).withValues(alpha: 0.05 * strength),
-              ],
-              stops: const [0.76, 1],
-            ),
-          ),
-        ),
-        Align(
-          alignment: const Alignment(0, -0.82),
-          child: Container(
-            width: 220,
-            height: 82,
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(999),
-              gradient: RadialGradient(
-                colors: [
-                  Colors.white.withValues(alpha: 0.10 * strength),
-                  Colors.white.withValues(alpha: 0.03 * strength),
-                  Colors.transparent,
-                ],
-                stops: const [0, 0.42, 1],
-              ),
-            ),
-          ),
-        ),
-        Align(
-          alignment: const Alignment(0, -0.54),
-          child: Container(
-            width: 260,
-            height: 120,
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(999),
-              gradient: RadialGradient(
-                colors: [
-                  Colors.white.withValues(alpha: 0.06 * strength),
-                  Colors.white.withValues(alpha: 0.015 * strength),
-                  Colors.transparent,
-                ],
-                stops: const [0, 0.36, 1],
-              ),
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildCinematicPresetOverlay() {
-    final strength = _presetStrength;
-    return Stack(
-      fit: StackFit.expand,
-      children: [
-        DecoratedBox(
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.topCenter,
-              end: Alignment.bottomCenter,
-              colors: [
-                const Color(0xFFFFB27A).withValues(alpha: 0.14 * strength),
-                Colors.transparent,
-                const Color(0xFF060A14).withValues(alpha: 0.34 * strength),
-              ],
-              stops: const [0, 0.36, 1],
-            ),
-          ),
-        ),
-        DecoratedBox(
-          decoration: BoxDecoration(
-            gradient: RadialGradient(
-              center: Alignment.center,
-              radius: 1.02,
-              colors: [
-                Colors.transparent,
-                const Color(0xFF060A14).withValues(alpha: 0.26 * strength),
-              ],
-              stops: const [0.54, 1],
-            ),
-          ),
-        ),
-        Align(
-          alignment: const Alignment(0, -0.78),
-          child: Container(
-            width: 260,
-            height: 96,
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(999),
-              gradient: RadialGradient(
-                colors: [
-                  const Color(0xFFFFC38E).withValues(alpha: 0.14 * strength),
-                  const Color(0xFFFFC38E).withValues(alpha: 0.05 * strength),
-                  Colors.transparent,
-                ],
-                stops: const [0, 0.42, 1],
-              ),
-            ),
-          ),
-        ),
-        Align(
-          alignment: const Alignment(0, -0.18),
-          child: Container(
-            width: 300,
-            height: 180,
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(999),
-              gradient: RadialGradient(
-                colors: [
-                  const Color(0xFFFFD2A8).withValues(alpha: 0.08 * strength),
-                  const Color(0xFFFFD2A8).withValues(alpha: 0.025 * strength),
-                  Colors.transparent,
-                ],
-                stops: const [0, 0.34, 1],
-              ),
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildVividPresetOverlay() {
-    final strength = _presetStrength;
-    return Stack(
-      fit: StackFit.expand,
-      children: [
-        DecoratedBox(
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-              colors: [
-                const Color(0xFF78D9FF).withValues(alpha: 0.13 * strength),
-                Colors.transparent,
-                const Color(0xFF6EFFC6).withValues(alpha: 0.12 * strength),
-              ],
-              stops: const [0, 0.50, 1],
-            ),
-          ),
-        ),
-        DecoratedBox(
-          decoration: BoxDecoration(
-            gradient: RadialGradient(
-              center: Alignment.topCenter,
-              radius: 1.12,
-              colors: [
-                Colors.white.withValues(alpha: 0.07 * strength),
-                Colors.transparent,
-                const Color(0xFF06101A).withValues(alpha: 0.10 * strength),
-              ],
-              stops: const [0, 0.42, 1],
-            ),
-          ),
-        ),
-        Align(
-          alignment: const Alignment(0.58, -0.36),
-          child: Container(
-            width: 180,
-            height: 120,
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(999),
-              gradient: RadialGradient(
-                colors: [
-                  Colors.white.withValues(alpha: 0.08 * strength),
-                  const Color(0xFF95F6FF).withValues(alpha: 0.03 * strength),
-                  Colors.transparent,
-                ],
-                stops: const [0, 0.34, 1],
-              ),
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildLowLightPresetOverlay() {
-    final strength = _presetStrength;
-    return Stack(
-      fit: StackFit.expand,
-      children: [
-        DecoratedBox(
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.topCenter,
-              end: Alignment.bottomCenter,
-              colors: [
-                Colors.white.withValues(alpha: 0.05 * strength),
-                const Color(0xFF8FC8FF).withValues(alpha: 0.08 * strength),
-                Colors.transparent,
-              ],
-              stops: const [0, 0.30, 1],
-            ),
-          ),
-        ),
-        DecoratedBox(
-          decoration: BoxDecoration(
-            gradient: RadialGradient(
-              center: Alignment.center,
-              radius: 1.14,
-              colors: [
-                Colors.white.withValues(alpha: 0.09 * strength),
-                Colors.transparent,
-                const Color(0xFF09111F).withValues(alpha: 0.08 * strength),
-              ],
-              stops: const [0, 0.48, 1],
-            ),
-          ),
-        ),
-        Align(
-          alignment: const Alignment(0, -0.10),
-          child: Container(
-            width: 280,
-            height: 180,
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(999),
-              gradient: RadialGradient(
-                colors: [
-                  Colors.white.withValues(alpha: 0.08 * strength),
-                  const Color(0xFFB6DCFF).withValues(alpha: 0.03 * strength),
-                  Colors.transparent,
-                ],
-                stops: const [0, 0.34, 1],
-              ),
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildSelectiveColorOverlay() {
-    final strength = _presetStrength;
-
-    return switch (_selectedPresetIndex) {
-      0 => Stack(
-          fit: StackFit.expand,
-          children: [
-            Align(
-              alignment: const Alignment(-0.72, -0.28),
-              child: Container(
-                width: 180,
-                height: 180,
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(999),
-                  gradient: RadialGradient(
-                    colors: [
-                      const Color(0xFF7FD9FF).withValues(alpha: 0.030 * strength),
-                      Colors.transparent,
-                    ],
-                    stops: const [0, 1],
-                  ),
-                ),
-              ),
-            ),
-            Align(
-              alignment: const Alignment(0.66, 0.20),
-              child: Container(
-                width: 180,
-                height: 180,
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(999),
-                  gradient: RadialGradient(
-                    colors: [
-                      const Color(0xFF9AE7C1).withValues(alpha: 0.026 * strength),
-                      Colors.transparent,
-                    ],
-                    stops: const [0, 1],
-                  ),
-                ),
-              ),
-            ),
-          ],
-        ),
-      1 => Stack(
-          fit: StackFit.expand,
-          children: [
-            Align(
-              alignment: const Alignment(-0.62, 0.36),
-              child: Container(
-                width: 240,
-                height: 220,
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(999),
-                  gradient: RadialGradient(
-                    colors: [
-                      const Color(0xFF5EA1D6).withValues(alpha: 0.070 * strength),
-                      Colors.transparent,
-                    ],
-                    stops: const [0, 1],
-                  ),
-                ),
-              ),
-            ),
-            Align(
-              alignment: const Alignment(0.48, -0.54),
-              child: Container(
-                width: 220,
-                height: 180,
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(999),
-                  gradient: RadialGradient(
-                    colors: [
-                      const Color(0xFFFFA66E).withValues(alpha: 0.058 * strength),
-                      Colors.transparent,
-                    ],
-                    stops: const [0, 1],
-                  ),
-                ),
-              ),
-            ),
-          ],
-        ),
-      2 => Stack(
-          fit: StackFit.expand,
-          children: [
-            Align(
-              alignment: const Alignment(-0.58, -0.10),
-              child: Container(
-                width: 220,
-                height: 220,
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(999),
-                  gradient: RadialGradient(
-                    colors: [
-                      const Color(0xFF6BCBFF).withValues(alpha: 0.090 * strength),
-                      Colors.transparent,
-                    ],
-                    stops: const [0, 1],
-                  ),
-                ),
-              ),
-            ),
-            Align(
-              alignment: const Alignment(0.62, 0.14),
-              child: Container(
-                width: 220,
-                height: 220,
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(999),
-                  gradient: RadialGradient(
-                    colors: [
-                      const Color(0xFF56F0B5).withValues(alpha: 0.082 * strength),
-                      Colors.transparent,
-                    ],
-                    stops: const [0, 1],
-                  ),
-                ),
-              ),
-            ),
-          ],
-        ),
-      _ => Stack(
-          fit: StackFit.expand,
-          children: [
-            Align(
-              alignment: const Alignment(-0.60, 0.28),
-              child: Container(
-                width: 260,
-                height: 220,
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(999),
-                  gradient: RadialGradient(
-                    colors: [
-                      const Color(0xFF7AB7E9).withValues(alpha: 0.060 * strength),
-                      Colors.transparent,
-                    ],
-                    stops: const [0, 1],
-                  ),
-                ),
-              ),
-            ),
-            Align(
-              alignment: const Alignment(0.44, -0.42),
-              child: Container(
-                width: 170,
-                height: 150,
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(999),
-                  gradient: RadialGradient(
-                    colors: [
-                      Colors.white.withValues(alpha: 0.030 * strength),
-                      Colors.transparent,
-                    ],
-                    stops: const [0, 1],
-                  ),
-                ),
-              ),
-            ),
-          ],
-        ),
-    };
-  }
-
-  Widget _buildSceneAwareOverlay() {
-    final strength = _presetStrength;
-
-    return switch (_currentSceneFlavor) {
-      SceneFlavor.portrait => Align(
-          alignment: const Alignment(0, -0.12),
-          child: Container(
-            width: 240,
-            height: 260,
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(999),
-              gradient: RadialGradient(
-                colors: [
-                  const Color(0xFFFFC8A6).withValues(alpha: 0.045 * strength),
-                  Colors.transparent,
-                ],
-                stops: const [0, 1],
-              ),
-            ),
-          ),
-        ),
-      SceneFlavor.water => Align(
-          alignment: const Alignment(-0.46, -0.16),
-          child: Container(
-            width: 280,
-            height: 260,
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(999),
-              gradient: RadialGradient(
-                colors: [
-                  const Color(0xFF6ECEFF).withValues(alpha: 0.060 * strength),
-                  Colors.transparent,
-                ],
-                stops: const [0, 1],
-              ),
-            ),
-          ),
-        ),
-      SceneFlavor.nature => Align(
-          alignment: const Alignment(0.34, 0.02),
-          child: Container(
-            width: 280,
-            height: 260,
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(999),
-              gradient: RadialGradient(
-                colors: [
-                  const Color(0xFF74E5A0).withValues(alpha: 0.050 * strength),
-                  Colors.transparent,
-                ],
-                stops: const [0, 1],
-              ),
-            ),
-          ),
-        ),
-      SceneFlavor.night => DecoratedBox(
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.topCenter,
-              end: Alignment.bottomCenter,
-              colors: [
-                const Color(0xFF1A2D52).withValues(alpha: 0.045 * strength),
-                Colors.transparent,
-                const Color(0xFF060A14).withValues(alpha: 0.060 * strength),
-              ],
-              stops: const [0, 0.42, 1],
-            ),
-          ),
-        ),
-      SceneFlavor.urban => Align(
-          alignment: const Alignment(-0.22, 0.10),
-          child: Container(
-            width: 320,
-            height: 220,
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(999),
-              gradient: LinearGradient(
-                begin: Alignment.centerLeft,
-                end: Alignment.centerRight,
-                colors: [
-                  const Color(0xFF6AA9FF).withValues(alpha: 0.028 * strength),
-                  Colors.transparent,
-                  const Color(0xFFFFB077).withValues(alpha: 0.028 * strength),
-                ],
-              ),
-            ),
-          ),
-        ),
-      SceneFlavor.animation => Align(
-          alignment: const Alignment(0.12, -0.06),
-          child: Container(
-            width: 320,
-            height: 260,
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(999),
-              gradient: RadialGradient(
-                colors: [
-                  const Color(0xFF8FE7FF).withValues(alpha: 0.070 * strength),
-                  const Color(0xFF8C7CFF).withValues(alpha: 0.055 * strength),
-                  Colors.transparent,
-                ],
-                stops: const [0, 0.42, 1],
-              ),
-            ),
-          ),
-        ),
-      SceneFlavor.socialEdit => Align(
-          alignment: const Alignment(0.18, -0.02),
-          child: Container(
-            width: 340,
-            height: 240,
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(999),
-              gradient: LinearGradient(
-                begin: Alignment.centerLeft,
-                end: Alignment.centerRight,
-                colors: [
-                  const Color(0xFF67D8FF).withValues(alpha: 0.040 * strength),
-                  Colors.transparent,
-                  const Color(0xFFFF92C8).withValues(alpha: 0.040 * strength),
-                ],
-              ),
-            ),
-          ),
-        ),
-      SceneFlavor.neutral => const SizedBox.shrink(),
-    };
   }
 
   // Builds the combined color matrix for the After view from manual controls and preset effects.
@@ -1767,395 +1126,86 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
   }
 
   Widget _buildAnalysisCard() {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(22),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              'AI Scene Analysis',
-              style: TextStyle(fontSize: 24, fontWeight: FontWeight.w800),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              _analysisSummary,
-              style: const TextStyle(color: Colors.white60, height: 1.5),
-            ),
-            const SizedBox(height: 18),
-            const Text(
-              'Scene Type',
-              style: TextStyle(fontWeight: FontWeight.w700),
-            ),
-            const SizedBox(height: 8),
-            const Text(
-              'Leave this on Auto or guide the analyzer with the kind of footage you imported.',
-              style: TextStyle(color: Colors.white60, height: 1.45),
-            ),
-            const SizedBox(height: 12),
-            _buildSceneTypeScroller(),
-            const SizedBox(height: 18),
-            Row(
-              children: [
-                Expanded(
-                  child: LinearProgressIndicator(
-                    value: _isAnalyzing ? null : _analysisConfidence / 100,
-                    minHeight: 10,
-                    borderRadius: BorderRadius.circular(999),
-                    backgroundColor: Colors.white.withValues(alpha: 0.08),
-                  ),
-                ),
-                const SizedBox(width: 14),
-                Text(
-                  _isAnalyzing ? 'Analyzing...' : '$_analysisConfidence%',
-                  style: const TextStyle(fontWeight: FontWeight.w700),
-                ),
-              ],
-            ),
-            const SizedBox(height: 18),
-            Wrap(
-              spacing: 10,
-              runSpacing: 10,
-              children: _analysisSignals
-                  .map(
-                    (signal) => _InsightPill(
-                      label: signal.split(':').first,
-                      value: signal.contains(':')
-                          ? signal.split(':').skip(1).join(':').trim()
-                          : signal,
-                    ),
-                  )
-                  .toList(),
-            ),
-            if (_analysisRecommendedPresetIndex != null) ...[
-              const SizedBox(height: 18),
-              Text(
-                'Suggested preset: ${_presets[_analysisRecommendedPresetIndex!].title}',
-                style: const TextStyle(
-                  fontWeight: FontWeight.w700,
-                  fontSize: 16,
-                ),
-              ),
-            ],
-            const SizedBox(height: 18),
-            FilledButton.icon(
-              onPressed: _runAiAnalysis,
-              icon: _isAnalyzing
-                  ? const SizedBox(
-                      width: 16,
-                      height: 16,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : const Icon(Icons.auto_fix_high_rounded),
-              label: Text(_isAnalyzing ? 'Analyzing Clip' : 'Run AI Pass'),
-            ),
-          ],
+    return AnalysisCard(
+      summary: _analysisSummary,
+      sceneOptions: [
+        SceneTypeOption(
+          label: 'Auto',
+          selected: _sceneOverride == null,
+          onTap: () => _setSceneOverride(null),
         ),
-      ),
+        ...SceneFlavor.values.map(
+          (flavor) => SceneTypeOption(
+            label: _sceneFlavorLabel(flavor),
+            selected: _sceneOverride == flavor,
+            onTap: () => _setSceneOverride(flavor),
+          ),
+        ),
+      ],
+      isAnalyzing: _isAnalyzing,
+      confidence: _analysisConfidence,
+      signals: _analysisSignals,
+      suggestedPresetTitle: _analysisRecommendedPresetIndex == null
+          ? null
+          : _presets[_analysisRecommendedPresetIndex!].title,
+      onRunAnalysis: _runAiAnalysis,
     );
   }
 
   Widget _buildPresetCard() {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(22),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              'Enhancement Presets',
-              style: TextStyle(fontSize: 24, fontWeight: FontWeight.w800),
-            ),
-            const SizedBox(height: 18),
-            _buildNoPresetOption(),
-            const SizedBox(height: 12),
-            ...List.generate(_presets.length, (index) {
-              final preset = _presets[index];
-              final isSelected = index == _selectedPresetIndex;
-              return Padding(
-                padding: EdgeInsets.only(
-                  bottom: index == _presets.length - 1 ? 0 : 12,
-                ),
-                child: InkWell(
-                  onTap: () {
-                    _applyPreset(index);
-                  },
-                  borderRadius: BorderRadius.circular(20),
-                  child: Container(
-                    padding: const EdgeInsets.all(16),
-                    decoration: BoxDecoration(
-                      borderRadius: BorderRadius.circular(20),
-                      color: isSelected
-                          ? preset.accent.withValues(alpha: 0.18)
-                          : Colors.white.withValues(alpha: 0.04),
-                      border: Border.all(
-                        color: isSelected ? preset.accent : const Color(0xFF22324D),
-                      ),
-                    ),
-                    child: Row(
-                      children: [
-                        Container(
-                          width: 44,
-                          height: 44,
-                          decoration: BoxDecoration(
-                            color: preset.accent.withValues(alpha: 0.16),
-                            shape: BoxShape.circle,
-                          ),
-                          child: Icon(preset.icon, color: preset.accent),
-                        ),
-                        const SizedBox(width: 14),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                preset.title,
-                                style: const TextStyle(
-                                  fontSize: 16,
-                                  fontWeight: FontWeight.w700,
-                                ),
-                              ),
-                              const SizedBox(height: 4),
-                              Text(
-                                preset.subtitle,
-                                style: const TextStyle(color: Colors.white60),
-                              ),
-                            ],
-                          ),
-                        ),
-                        if (isSelected)
-                          const Icon(Icons.check_circle_rounded, color: Colors.white),
-                      ],
-                    ),
-                  ),
-                ),
-              );
-            }),
-            if (_selectedPresetIndex >= 0) ...[
-              const SizedBox(height: 18),
-              _buildSlider(
-                label: 'Preset Strength',
-                value: _presetStrength * 100,
-                onChanged: (value) {
-                  setState(() {
-                    _presetStrength = value / 100;
-                  });
-                },
-              ),
-            ],
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildNoPresetOption() {
-    final isSelected = _selectedPresetIndex == -1;
-    return InkWell(
-      onTap: _clearPreset,
-      borderRadius: BorderRadius.circular(18),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(18),
-          color: isSelected
-              ? Colors.white.withValues(alpha: 0.10)
-              : Colors.white.withValues(alpha: 0.04),
-          border: Border.all(
-            color: isSelected ? Colors.white70 : const Color(0xFF22324D),
-          ),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Icon(Icons.block_rounded, size: 18, color: Colors.white70),
-            const SizedBox(width: 10),
-            const Text(
-              'No Preset',
-              style: TextStyle(
-                fontWeight: FontWeight.w700,
-              ),
-            ),
-            if (isSelected) ...[
-              const SizedBox(width: 10),
-              const Icon(Icons.check_circle_rounded, size: 18),
-            ],
-          ],
-        ),
-      ),
+    return PresetsCard(
+      presets: _presets,
+      selectedPresetIndex: _selectedPresetIndex,
+      onSelectPreset: _applyPreset,
+      onClearPreset: _clearPreset,
+      presetStrength: _presetStrength,
+      onPresetStrengthChanged: (value) {
+        setState(() {
+          _presetStrength = value / 100;
+        });
+      },
     );
   }
 
   Widget _buildAdjustmentsCard() {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(22),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              'Manual Adjustments',
-              style: TextStyle(fontSize: 24, fontWeight: FontWeight.w800),
-            ),
-            const SizedBox(height: 8),
-            const Text(
-              'Adjust the video accordingly to how you prefer. Use the sliders the below to get a specific value.',
-              style: TextStyle(color: Colors.white60, height: 1.5),
-            ),
-            const SizedBox(height: 18),
-            _buildSlider(
-              label: 'Brightness',
-              value: _brightness,
-              onChanged: (value) => setState(() => _brightness = value),
-            ),
-            _buildSlider(
-              label: 'Contrast',
-              value: _contrast,
-              onChanged: (value) => setState(() => _contrast = value),
-            ),
-            _buildSlider(
-              label: 'Saturation',
-              value: _saturation,
-              onChanged: (value) => setState(() => _saturation = value),
-            ),
-            _buildSlider(
-              label: 'Warmth',
-              value: _warmth,
-              onChanged: (value) => setState(() => _warmth = value),
-            ),
-            _buildSlider(
-              label: 'Tint',
-              value: _tint,
-              onChanged: (value) => setState(() => _tint = value),
-            ),
-            _buildSlider(
-              label: 'Highlights',
-              value: _highlights,
-              onChanged: (value) => setState(() => _highlights = value),
-            ),
-            _buildSlider(
-              label: 'Shadows',
-              value: _shadows,
-              onChanged: (value) => setState(() => _shadows = value),
-            ),
-          ],
+    return AdjustmentsCard(
+      controls: [
+        AdjustmentControl(
+          label: 'Brightness',
+          value: _brightness,
+          onChanged: (value) => setState(() => _brightness = value),
         ),
-      ),
-    );
-  }
-
-  Widget _buildSceneTypeScroller() {
-    return SizedBox(
-      height: 48,
-      child: Stack(
-        children: [
-          ListView(
-            scrollDirection: Axis.horizontal,
-            padding: const EdgeInsets.symmetric(horizontal: 20),
-            children: [
-              _buildSceneChip(
-                label: 'Auto',
-                selected: _sceneOverride == null,
-                onTap: () => _setSceneOverride(null),
-              ),
-              const SizedBox(width: 10),
-              ...SceneFlavor.values.expand((flavor) {
-                return [
-                  _buildSceneChip(
-                    label: _sceneFlavorLabel(flavor),
-                    selected: _sceneOverride == flavor,
-                    onTap: () => _setSceneOverride(flavor),
-                  ),
-                  const SizedBox(width: 10),
-                ];
-              }),
-            ],
-          ),
-          const Positioned(
-            left: 0,
-            top: 0,
-            bottom: 0,
-            child: IgnorePointer(
-              child: _ScrollerFade(
-                begin: Alignment.centerLeft,
-                end: Alignment.centerRight,
-              ),
-            ),
-          ),
-          const Positioned(
-            right: 0,
-            top: 0,
-            bottom: 0,
-            child: IgnorePointer(
-              child: _ScrollerFade(
-                begin: Alignment.centerRight,
-                end: Alignment.centerLeft,
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildSceneChip({
-    required String label,
-    required bool selected,
-    required VoidCallback onTap,
-  }) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(999),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-        decoration: BoxDecoration(
-          color: selected
-              ? Colors.white.withValues(alpha: 0.12)
-              : Colors.white.withValues(alpha: 0.04),
-          borderRadius: BorderRadius.circular(999),
-          border: Border.all(
-            color: selected ? Colors.white70 : const Color(0xFF22324D),
-          ),
+        AdjustmentControl(
+          label: 'Contrast',
+          value: _contrast,
+          onChanged: (value) => setState(() => _contrast = value),
         ),
-        child: Text(
-          label,
-          style: TextStyle(
-            fontWeight: FontWeight.w700,
-            color: selected ? Colors.white : Colors.white70,
-          ),
+        AdjustmentControl(
+          label: 'Saturation',
+          value: _saturation,
+          onChanged: (value) => setState(() => _saturation = value),
         ),
-      ),
-    );
-  }
-
-  Widget _buildSlider({
-    required String label,
-    required double value,
-    required ValueChanged<double> onChanged,
-  }) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 14),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Text(label, style: const TextStyle(fontWeight: FontWeight.w700)),
-              const Spacer(),
-              Text(
-                value.round().toString(),
-                style: const TextStyle(color: Colors.white60),
-              ),
-            ],
-          ),
-          Slider(
-            value: value,
-            min: 0,
-            max: 100,
-            onChanged: onChanged,
-          ),
-        ],
-      ),
+        AdjustmentControl(
+          label: 'Warmth',
+          value: _warmth,
+          onChanged: (value) => setState(() => _warmth = value),
+        ),
+        AdjustmentControl(
+          label: 'Tint',
+          value: _tint,
+          onChanged: (value) => setState(() => _tint = value),
+        ),
+        AdjustmentControl(
+          label: 'Highlights',
+          value: _highlights,
+          onChanged: (value) => setState(() => _highlights = value),
+        ),
+        AdjustmentControl(
+          label: 'Shadows',
+          value: _shadows,
+          onChanged: (value) => setState(() => _shadows = value),
+        ),
+      ],
     );
   }
 
@@ -2247,67 +1297,4 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
   }
 }
 
-class _InsightPill extends StatelessWidget {
-  const _InsightPill({
-    required this.label,
-    required this.value,
-  });
-
-  final String label;
-  final String value;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.05),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
-      ),
-      child: RichText(
-        text: TextSpan(
-          style: DefaultTextStyle.of(context).style,
-          children: [
-            TextSpan(
-              text: '$label: ',
-              style: const TextStyle(color: Colors.white60),
-            ),
-            TextSpan(
-              text: value,
-              style: const TextStyle(fontWeight: FontWeight.w700),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _ScrollerFade extends StatelessWidget {
-  const _ScrollerFade({
-    required this.begin,
-    required this.end,
-  });
-
-  final Alignment begin;
-  final Alignment end;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: 22,
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          begin: begin,
-          end: end,
-          colors: const [
-            Color(0xFF121D31),
-            Color(0x00121D31),
-          ],
-        ),
-      ),
-    );
-  }
-}
 

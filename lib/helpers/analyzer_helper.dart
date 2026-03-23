@@ -112,6 +112,20 @@ class AnalyzerHelper {
     };
   }
 
+  // Recommends a preset by combining sampled frame statistics with lighter scene/title hints.
+  //
+  // The scorer works like a simple weighted voting system:
+  // - each preset starts at 0
+  // - scene type adds a soft prior so auto/manual scene context can gently bias the result
+  // - sampled frame metrics add the strongest votes because they come from actual image data
+  // - title keywords only act as a fallback nudge when the filename clearly signals intent
+  // - the preset with the highest total wins
+  //
+  // Score slots map to presets in this order:
+  // 0 = Balanced
+  // 1 = Cinematic
+  // 2 = Vivid
+  // 3 = Low-Light Rescue
   static AnalysisRecommendation analyzeRecommendation({
     required DemoClip clip,
     required SceneFlavor scene,
