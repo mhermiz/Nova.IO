@@ -1,6 +1,7 @@
 import 'dart:math' as math;
 import 'dart:io';
 import 'dart:typed_data';
+import 'dart:ui' as ui;
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
@@ -9,6 +10,17 @@ import 'package:video_thumbnail/video_thumbnail.dart';
 
 void main() {
   runApp(const VideoEnhancerApp());
+}
+
+enum SceneFlavor {
+  neutral,
+  portrait,
+  nature,
+  water,
+  night,
+  urban,
+  animation,
+  media,
 }
 
 class VideoEnhancerApp extends StatelessWidget {
@@ -91,9 +103,11 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
   double _contrast = 61;
   double _saturation = 58;
   double _warmth = 46;
+  double _tint = 50;
   double _highlights = 52;
   double _shadows = 48;
   double _presetStrength = 0.85;
+  SceneFlavor? _sceneOverride;
   VideoPlayerController? _videoController;
   bool _isPreviewLoading = false;
   final Map<String, Uint8List> _clipThumbnails = {};
@@ -103,6 +117,16 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
       _clips.isEmpty ? null : _clips[_selectedClipIndex];
   EnhancementPreset? get _selectedPreset =>
       _selectedPresetIndex >= 0 ? _presets[_selectedPresetIndex] : null;
+  SceneFlavor get _currentSceneFlavor {
+    if (_sceneOverride != null) {
+      return _sceneOverride!;
+    }
+    final clip = _selectedClip;
+    if (clip == null) {
+      return SceneFlavor.neutral;
+    }
+    return _sceneFlavorForClip(clip);
+  }
 
   @override
   void initState() {
@@ -131,6 +155,75 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
     return weightedScore.clamp(0, 100).round();
   }
 
+  SceneFlavor _sceneFlavorForClip(DemoClip clip) {
+    final haystack =
+        '${clip.title} ${clip.location} ${clip.tag}'.toLowerCase();
+
+    if (haystack.contains('portrait') ||
+        haystack.contains('face') ||
+        haystack.contains('selfie') ||
+        haystack.contains('person')) {
+      return SceneFlavor.portrait;
+    }
+    if (haystack.contains('ocean') ||
+        haystack.contains('beach') ||
+        haystack.contains('sea') ||
+        haystack.contains('water')) {
+      return SceneFlavor.water;
+    }
+    if (haystack.contains('forest') ||
+        haystack.contains('nature') ||
+        haystack.contains('park') ||
+        haystack.contains('foliage')) {
+      return SceneFlavor.nature;
+    }
+    if (haystack.contains('night') ||
+        haystack.contains('low light') ||
+        haystack.contains('dark') ||
+        haystack.contains('neon')) {
+      return SceneFlavor.night;
+    }
+    if (haystack.contains('street') ||
+        haystack.contains('city') ||
+        haystack.contains('urban') ||
+        haystack.contains('downtown')) {
+      return SceneFlavor.urban;
+    }
+    if (haystack.contains('animation') ||
+        haystack.contains('anime') ||
+        haystack.contains('cartoon') ||
+        haystack.contains('motion graphic')) {
+      return SceneFlavor.animation;
+    }
+    if (haystack.contains('tiktok') ||
+        haystack.contains('edit') ||
+        haystack.contains('social') ||
+        haystack.contains('reel') ||
+        haystack.contains('shorts')) {
+      return SceneFlavor.media;
+    }
+    return SceneFlavor.neutral;
+  }
+
+  String _sceneFlavorLabel(SceneFlavor flavor) {
+    return switch (flavor) {
+      SceneFlavor.neutral => 'Neutral',
+      SceneFlavor.portrait => 'Portrait',
+      SceneFlavor.nature => 'Nature',
+      SceneFlavor.water => 'Water',
+      SceneFlavor.night => 'Night',
+      SceneFlavor.urban => 'Urban',
+      SceneFlavor.animation => 'Animation',
+      SceneFlavor.media => 'Media',
+    };
+  }
+
+  void _setSceneOverride(SceneFlavor? flavor) {
+    setState(() {
+      _sceneOverride = flavor;
+    });
+  }
+
   void _clearPreset() {
     setState(() {
       _selectedPresetIndex = -1;
@@ -143,6 +236,12 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
       1 => (brightness: 44.0, contrast: 78.0, saturation: 58.0, warmth: 61.0),
       2 => (brightness: 58.0, contrast: 72.0, saturation: 84.0, warmth: 48.0),
       _ => (brightness: 70.0, contrast: 48.0, saturation: 44.0, warmth: 57.0),
+    };
+    final colorBalance = switch (presetIndex) {
+      0 => 50.0,
+      1 => 55.0,
+      2 => 46.0,
+      _ => 52.0,
     };
     final tonal = switch (presetIndex) {
       0 => (highlights: 48.0, shadows: 50.0),
@@ -157,6 +256,7 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
       _contrast = settings.contrast;
       _saturation = settings.saturation;
       _warmth = settings.warmth;
+      _tint = colorBalance;
       _highlights = tonal.highlights;
       _shadows = tonal.shadows;
       _presetStrength = 0.85;
@@ -175,11 +275,14 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
 
     if (!mounted) return;
 
-    final title = selectedClip.title.toLowerCase();
-    final presetIndex = switch (title) {
-      String value when value.contains('street') => 0,
-      String value when value.contains('ocean') => 2,
-      _ => 3,
+    final presetIndex = switch (_sceneFlavorForClip(selectedClip)) {
+      SceneFlavor.portrait => 0,
+      SceneFlavor.water || SceneFlavor.nature => 2,
+      SceneFlavor.night => 3,
+      SceneFlavor.urban => 1,
+      SceneFlavor.animation => 2,
+      SceneFlavor.media => 2,
+      SceneFlavor.neutral => 0,
     };
 
     setState(() {
@@ -211,6 +314,7 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
     setState(() {
       _clips.addAll(importedClips);
       _selectedClipIndex = _clips.length - importedClips.length;
+      _sceneOverride = null;
     });
 
     _generateThumbnails(importedClips);
@@ -469,6 +573,13 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
                     _selectedPreset?.title ?? 'No preset',
                   ),
                   const SizedBox(height: 12),
+                  _buildMetricTile(
+                    'Scene type',
+                    _sceneOverride == null
+                        ? 'Auto • ${_sceneFlavorLabel(_currentSceneFlavor)}'
+                        : _sceneFlavorLabel(_currentSceneFlavor),
+                  ),
+                  const SizedBox(height: 12),
                   _buildMetricTile('Quality score', '$_qualityScore / 100'),
                 ],
               ),
@@ -651,6 +762,14 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
                 IgnorePointer(
                   child: _buildLowLightPresetOverlay(),
                 ),
+              if (_showAfter && _selectedPresetIndex >= 0)
+                IgnorePointer(
+                  child: _buildSelectiveColorOverlay(),
+                ),
+              if (_showAfter && _selectedClip != null)
+                IgnorePointer(
+                  child: _buildSceneAwareOverlay(),
+                ),
               if (_isPreviewLoading)
                 Container(
                   color: Colors.black.withValues(alpha: 0.32),
@@ -794,6 +913,7 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
                     onTap: () {
                       setState(() {
                         _selectedClipIndex = index;
+                        _sceneOverride = null;
                       });
                       _syncPreviewController();
                     },
@@ -858,9 +978,106 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
       return video;
     }
 
-    return ColorFiltered(
+    final gradedVideo = ColorFiltered(
       colorFilter: ColorFilter.matrix(_buildAdjustmentMatrix()),
       child: video,
+    );
+
+    return _buildSkinToneProtection(
+      _buildTextureTreatment(gradedVideo),
+    );
+  }
+
+  Widget _buildTextureTreatment(Widget gradedVideo) {
+    final strength = _presetStrength;
+
+    return switch (_selectedPresetIndex) {
+      1 => Stack(
+          fit: StackFit.expand,
+          children: [
+            gradedVideo,
+            Opacity(
+              opacity: 0.10 * strength,
+              child: ImageFiltered(
+                imageFilter: ui.ImageFilter.blur(
+                  sigmaX: 1.8 * strength,
+                  sigmaY: 1.8 * strength,
+                ),
+                child: gradedVideo,
+              ),
+            ),
+          ],
+        ),
+      2 => Stack(
+          fit: StackFit.expand,
+          children: [
+            gradedVideo,
+            DecoratedBox(
+              decoration: BoxDecoration(
+                border: Border.all(
+                  color: Colors.white.withValues(alpha: 0.045 * strength),
+                ),
+              ),
+            ),
+          ],
+        ),
+      3 => Stack(
+          fit: StackFit.expand,
+          children: [
+            gradedVideo,
+            Opacity(
+              opacity: 0.08 * strength,
+              child: ImageFiltered(
+                imageFilter: ui.ImageFilter.blur(
+                  sigmaX: 1.1 * strength,
+                  sigmaY: 1.1 * strength,
+                ),
+                child: gradedVideo,
+              ),
+            ),
+          ],
+        ),
+      _ => gradedVideo,
+    };
+  }
+
+  Widget _buildSkinToneProtection(Widget processedVideo) {
+    final strength = switch (_selectedPresetIndex) {
+      1 => 0.10 * _presetStrength,
+      2 => 0.08 * _presetStrength,
+      3 => 0.09 * _presetStrength,
+      _ => 0.04 * _presetStrength,
+    };
+
+    if (_selectedPresetIndex < 0 || strength <= 0) {
+      return processedVideo;
+    }
+
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        processedVideo,
+        IgnorePointer(
+          child: Align(
+            alignment: const Alignment(0, -0.08),
+            child: Container(
+              width: 230,
+              height: 230,
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(999),
+                gradient: RadialGradient(
+                  colors: [
+                    const Color(0xFFFFC39E).withValues(alpha: strength),
+                    const Color(0xFFF3B08A).withValues(alpha: strength * 0.45),
+                    Colors.transparent,
+                  ],
+                  stops: const [0, 0.36, 1],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ],
     );
   }
 
@@ -1223,14 +1440,308 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
     );
   }
 
+  Widget _buildSelectiveColorOverlay() {
+    final strength = _presetStrength;
+
+    return switch (_selectedPresetIndex) {
+      0 => Stack(
+          fit: StackFit.expand,
+          children: [
+            Align(
+              alignment: const Alignment(-0.72, -0.28),
+              child: Container(
+                width: 180,
+                height: 180,
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(999),
+                  gradient: RadialGradient(
+                    colors: [
+                      const Color(0xFF7FD9FF).withValues(alpha: 0.030 * strength),
+                      Colors.transparent,
+                    ],
+                    stops: const [0, 1],
+                  ),
+                ),
+              ),
+            ),
+            Align(
+              alignment: const Alignment(0.66, 0.20),
+              child: Container(
+                width: 180,
+                height: 180,
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(999),
+                  gradient: RadialGradient(
+                    colors: [
+                      const Color(0xFF9AE7C1).withValues(alpha: 0.026 * strength),
+                      Colors.transparent,
+                    ],
+                    stops: const [0, 1],
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      1 => Stack(
+          fit: StackFit.expand,
+          children: [
+            Align(
+              alignment: const Alignment(-0.62, 0.36),
+              child: Container(
+                width: 240,
+                height: 220,
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(999),
+                  gradient: RadialGradient(
+                    colors: [
+                      const Color(0xFF5EA1D6).withValues(alpha: 0.070 * strength),
+                      Colors.transparent,
+                    ],
+                    stops: const [0, 1],
+                  ),
+                ),
+              ),
+            ),
+            Align(
+              alignment: const Alignment(0.48, -0.54),
+              child: Container(
+                width: 220,
+                height: 180,
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(999),
+                  gradient: RadialGradient(
+                    colors: [
+                      const Color(0xFFFFA66E).withValues(alpha: 0.058 * strength),
+                      Colors.transparent,
+                    ],
+                    stops: const [0, 1],
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      2 => Stack(
+          fit: StackFit.expand,
+          children: [
+            Align(
+              alignment: const Alignment(-0.58, -0.10),
+              child: Container(
+                width: 220,
+                height: 220,
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(999),
+                  gradient: RadialGradient(
+                    colors: [
+                      const Color(0xFF6BCBFF).withValues(alpha: 0.090 * strength),
+                      Colors.transparent,
+                    ],
+                    stops: const [0, 1],
+                  ),
+                ),
+              ),
+            ),
+            Align(
+              alignment: const Alignment(0.62, 0.14),
+              child: Container(
+                width: 220,
+                height: 220,
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(999),
+                  gradient: RadialGradient(
+                    colors: [
+                      const Color(0xFF56F0B5).withValues(alpha: 0.082 * strength),
+                      Colors.transparent,
+                    ],
+                    stops: const [0, 1],
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      _ => Stack(
+          fit: StackFit.expand,
+          children: [
+            Align(
+              alignment: const Alignment(-0.60, 0.28),
+              child: Container(
+                width: 260,
+                height: 220,
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(999),
+                  gradient: RadialGradient(
+                    colors: [
+                      const Color(0xFF7AB7E9).withValues(alpha: 0.060 * strength),
+                      Colors.transparent,
+                    ],
+                    stops: const [0, 1],
+                  ),
+                ),
+              ),
+            ),
+            Align(
+              alignment: const Alignment(0.44, -0.42),
+              child: Container(
+                width: 170,
+                height: 150,
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(999),
+                  gradient: RadialGradient(
+                    colors: [
+                      Colors.white.withValues(alpha: 0.030 * strength),
+                      Colors.transparent,
+                    ],
+                    stops: const [0, 1],
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+    };
+  }
+
+  Widget _buildSceneAwareOverlay() {
+    final strength = _presetStrength;
+
+    return switch (_currentSceneFlavor) {
+      SceneFlavor.portrait => Align(
+          alignment: const Alignment(0, -0.12),
+          child: Container(
+            width: 240,
+            height: 260,
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(999),
+              gradient: RadialGradient(
+                colors: [
+                  const Color(0xFFFFC8A6).withValues(alpha: 0.045 * strength),
+                  Colors.transparent,
+                ],
+                stops: const [0, 1],
+              ),
+            ),
+          ),
+        ),
+      SceneFlavor.water => Align(
+          alignment: const Alignment(-0.46, -0.16),
+          child: Container(
+            width: 280,
+            height: 260,
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(999),
+              gradient: RadialGradient(
+                colors: [
+                  const Color(0xFF6ECEFF).withValues(alpha: 0.060 * strength),
+                  Colors.transparent,
+                ],
+                stops: const [0, 1],
+              ),
+            ),
+          ),
+        ),
+      SceneFlavor.nature => Align(
+          alignment: const Alignment(0.34, 0.02),
+          child: Container(
+            width: 280,
+            height: 260,
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(999),
+              gradient: RadialGradient(
+                colors: [
+                  const Color(0xFF74E5A0).withValues(alpha: 0.050 * strength),
+                  Colors.transparent,
+                ],
+                stops: const [0, 1],
+              ),
+            ),
+          ),
+        ),
+      SceneFlavor.night => DecoratedBox(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+              colors: [
+                const Color(0xFF1A2D52).withValues(alpha: 0.045 * strength),
+                Colors.transparent,
+                const Color(0xFF060A14).withValues(alpha: 0.060 * strength),
+              ],
+              stops: const [0, 0.42, 1],
+            ),
+          ),
+        ),
+      SceneFlavor.urban => Align(
+          alignment: const Alignment(-0.22, 0.10),
+          child: Container(
+            width: 320,
+            height: 220,
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(999),
+              gradient: LinearGradient(
+                begin: Alignment.centerLeft,
+                end: Alignment.centerRight,
+                colors: [
+                  const Color(0xFF6AA9FF).withValues(alpha: 0.028 * strength),
+                  Colors.transparent,
+                  const Color(0xFFFFB077).withValues(alpha: 0.028 * strength),
+                ],
+              ),
+            ),
+          ),
+        ),
+      SceneFlavor.animation => Align(
+          alignment: const Alignment(0.12, -0.06),
+          child: Container(
+            width: 320,
+            height: 260,
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(999),
+              gradient: RadialGradient(
+                colors: [
+                  const Color(0xFF8FE7FF).withValues(alpha: 0.070 * strength),
+                  const Color(0xFF8C7CFF).withValues(alpha: 0.055 * strength),
+                  Colors.transparent,
+                ],
+                stops: const [0, 0.42, 1],
+              ),
+            ),
+          ),
+        ),
+      SceneFlavor.media => Align(
+          alignment: const Alignment(0.18, -0.02),
+          child: Container(
+            width: 340,
+            height: 240,
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(999),
+              gradient: LinearGradient(
+                begin: Alignment.centerLeft,
+                end: Alignment.centerRight,
+                colors: [
+                  const Color(0xFF67D8FF).withValues(alpha: 0.040 * strength),
+                  Colors.transparent,
+                  const Color(0xFFFF92C8).withValues(alpha: 0.040 * strength),
+                ],
+              ),
+            ),
+          ),
+        ),
+      SceneFlavor.neutral => const SizedBox.shrink(),
+    };
+  }
+
   List<double> _buildAdjustmentMatrix() {
     final brightnessOffset = (_brightness - 50) * 2.2;
     final contrastValue = 0.7 + (_contrast / 100) * 0.9;
     final saturationValue = 0.35 + (_saturation / 100) * 1.3;
     final warmthShift = (_warmth - 50) / 100 * 28;
+    final tintShift = (_tint - 50) / 100 * 20;
     final highlightsOffset = (50 - _highlights) * 0.8;
     final shadowsOffset = (_shadows - 50) * 0.7;
     final presetStrength = _showAfter ? _presetStrength : 0.0;
+    final curve = _presetToneCurve(presetStrength);
     final clarityBoost = switch (_selectedPresetIndex) {
       0 when _showAfter => 1.0 + (0.05 * presetStrength),
       2 when _showAfter => 1.0 + (0.08 * presetStrength),
@@ -1247,6 +1758,7 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
     );
     final saturationMatrix = _saturationMatrix(saturationValue);
     final warmthMatrix = _warmthMatrix(warmthShift);
+    final tintMatrix = _tintMatrix(tintShift);
     final brightnessMatrix = _brightnessMatrix(brightnessOffset);
     final clarityMatrix = _contrastMatrix(
       clarityBoost,
@@ -1256,22 +1768,53 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
     final lowLightLiftMatrix = _brightnessMatrix(lowLightLift);
     final highlightsMatrix = _brightnessMatrix(highlightsOffset);
     final shadowsMatrix = _brightnessMatrix(shadowsOffset);
+    final sceneTintMatrix = _tintMatrix(_sceneToneAdjustment().tintShift);
+    final sceneBrightnessMatrix = _brightnessMatrix(
+      _sceneToneAdjustment().brightnessLift,
+    );
+    final curveShadowLiftMatrix = _brightnessMatrix(curve.shadowLift);
+    final curveMidtoneMatrix = _brightnessMatrix(curve.midtoneLift);
+    final curveContrastMatrix = _contrastMatrix(
+      curve.contrast,
+      translate: 128 * (1 - curve.contrast) + curve.blackLift,
+    );
 
     return _multiplyColorMatrices(
-      highlightsMatrix,
+      sceneBrightnessMatrix,
       _multiplyColorMatrices(
-        shadowsMatrix,
+        sceneTintMatrix,
         _multiplyColorMatrices(
-          lowLightLiftMatrix,
+          curveShadowLiftMatrix,
           _multiplyColorMatrices(
-            fadeMatrix,
+            curveMidtoneMatrix,
             _multiplyColorMatrices(
-              clarityMatrix,
+              curveContrastMatrix,
               _multiplyColorMatrices(
-                brightnessMatrix,
+                highlightsMatrix,
                 _multiplyColorMatrices(
-                  warmthMatrix,
-                  _multiplyColorMatrices(saturationMatrix, contrastMatrix),
+                  shadowsMatrix,
+                  _multiplyColorMatrices(
+                    lowLightLiftMatrix,
+                    _multiplyColorMatrices(
+                      fadeMatrix,
+                      _multiplyColorMatrices(
+                        clarityMatrix,
+                        _multiplyColorMatrices(
+                          brightnessMatrix,
+                          _multiplyColorMatrices(
+                            tintMatrix,
+                            _multiplyColorMatrices(
+                              warmthMatrix,
+                              _multiplyColorMatrices(
+                                saturationMatrix,
+                                contrastMatrix,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
                 ),
               ),
             ),
@@ -1279,6 +1822,63 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
         ),
       ),
     );
+  }
+
+  ({
+    double contrast,
+    double blackLift,
+    double shadowLift,
+    double midtoneLift,
+  }) _presetToneCurve(double strength) {
+    return switch (_selectedPresetIndex) {
+      0 when _showAfter => (
+          contrast: 1.0 + (0.04 * strength),
+          blackLift: 2.0 * strength,
+          shadowLift: 1.6 * strength,
+          midtoneLift: 0.8 * strength,
+        ),
+      1 when _showAfter => (
+          contrast: 1.0 + (0.08 * strength),
+          blackLift: 7.5 * strength,
+          shadowLift: 0.8 * strength,
+          midtoneLift: -1.2 * strength,
+        ),
+      2 when _showAfter => (
+          contrast: 1.0 + (0.09 * strength),
+          blackLift: 0.5 * strength,
+          shadowLift: -0.6 * strength,
+          midtoneLift: 2.6 * strength,
+        ),
+      3 when _showAfter => (
+          contrast: 1.0 + (0.02 * strength),
+          blackLift: 5.0 * strength,
+          shadowLift: 4.6 * strength,
+          midtoneLift: 1.4 * strength,
+        ),
+      _ => (
+          contrast: 1.0,
+          blackLift: 0.0,
+          shadowLift: 0.0,
+          midtoneLift: 0.0,
+        ),
+    };
+  }
+
+  ({double tintShift, double brightnessLift}) _sceneToneAdjustment() {
+    if (!_showAfter) {
+      return (tintShift: 0.0, brightnessLift: 0.0);
+    }
+
+    return switch (_currentSceneFlavor) {
+      SceneFlavor.portrait => (tintShift: 1.2, brightnessLift: 1.2),
+      SceneFlavor.water => (tintShift: -1.6, brightnessLift: 1.4),
+      SceneFlavor.nature => (tintShift: -0.8, brightnessLift: 0.8),
+      SceneFlavor.night => (tintShift: -1.4, brightnessLift: 1.6),
+      SceneFlavor.urban => (tintShift: 0.4, brightnessLift: 0.6),
+      SceneFlavor.animation => (tintShift: -0.6, brightnessLift: 2.0),
+      SceneFlavor.media => (tintShift: 0.8, brightnessLift: 2.2),
+      SceneFlavor.neutral => (tintShift: 0.0, brightnessLift: 0.0),
+    };
   }
 
   List<double> _brightnessMatrix(double offset) {
@@ -1318,6 +1918,15 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
       1.0, 0, 0, 0, shift,
       0, 1.0, 0, 0, 0,
       0, 0, 1.0, 0, -shift,
+      0, 0, 0, 1, 0,
+    ];
+  }
+
+  List<double> _tintMatrix(double shift) {
+    return [
+      1.0, 0, 0, 0, shift * 0.45,
+      0, 1.0, 0, 0, -shift,
+      0, 0, 1.0, 0, shift * 0.45,
       0, 0, 0, 1, 0,
     ];
   }
@@ -1738,6 +2347,13 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
               style: TextStyle(color: Colors.white60, height: 1.5),
             ),
             const SizedBox(height: 18),
+            Text(
+              'Scene Type',
+              style: const TextStyle(fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 10),
+            _buildSceneTypeScroller(),
+            const SizedBox(height: 18),
             _buildSlider(
               label: 'Brightness',
               value: _brightness,
@@ -1759,6 +2375,11 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
               onChanged: (value) => setState(() => _warmth = value),
             ),
             _buildSlider(
+              label: 'Tint',
+              value: _tint,
+              onChanged: (value) => setState(() => _tint = value),
+            ),
+            _buildSlider(
               label: 'Highlights',
               value: _highlights,
               onChanged: (value) => setState(() => _highlights = value),
@@ -1769,6 +2390,90 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
               onChanged: (value) => setState(() => _shadows = value),
             ),
           ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSceneTypeScroller() {
+    return SizedBox(
+      height: 48,
+      child: Stack(
+        children: [
+          ListView(
+            scrollDirection: Axis.horizontal,
+            padding: const EdgeInsets.symmetric(horizontal: 20),
+            children: [
+              _buildSceneChip(
+                label: 'Auto',
+                selected: _sceneOverride == null,
+                onTap: () => _setSceneOverride(null),
+              ),
+              const SizedBox(width: 10),
+              ...SceneFlavor.values.expand((flavor) {
+                return [
+                  _buildSceneChip(
+                    label: _sceneFlavorLabel(flavor),
+                    selected: _sceneOverride == flavor,
+                    onTap: () => _setSceneOverride(flavor),
+                  ),
+                  const SizedBox(width: 10),
+                ];
+              }),
+            ],
+          ),
+          const Positioned(
+            left: 0,
+            top: 0,
+            bottom: 0,
+            child: IgnorePointer(
+              child: _ScrollerFade(
+                begin: Alignment.centerLeft,
+                end: Alignment.centerRight,
+              ),
+            ),
+          ),
+          const Positioned(
+            right: 0,
+            top: 0,
+            bottom: 0,
+            child: IgnorePointer(
+              child: _ScrollerFade(
+                begin: Alignment.centerRight,
+                end: Alignment.centerLeft,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSceneChip({
+    required String label,
+    required bool selected,
+    required VoidCallback onTap,
+  }) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(999),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        decoration: BoxDecoration(
+          color: selected
+              ? Colors.white.withValues(alpha: 0.12)
+              : Colors.white.withValues(alpha: 0.04),
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(
+            color: selected ? Colors.white70 : const Color(0xFF22324D),
+          ),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            fontWeight: FontWeight.w700,
+            color: selected ? Colors.white : Colors.white70,
+          ),
         ),
       ),
     );
@@ -1978,6 +2683,33 @@ class EnhancementPreset {
   final String subtitle;
   final Color accent;
   final IconData icon;
+}
+
+class _ScrollerFade extends StatelessWidget {
+  const _ScrollerFade({
+    required this.begin,
+    required this.end,
+  });
+
+  final Alignment begin;
+  final Alignment end;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 22,
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: begin,
+          end: end,
+          colors: const [
+            Color(0xFF121D31),
+            Color(0x00121D31),
+          ],
+        ),
+      ),
+    );
+  }
 }
 
 class FramePainter extends CustomPainter {
