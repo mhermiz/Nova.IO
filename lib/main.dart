@@ -1,4 +1,3 @@
-import 'dart:math' as math;
 import 'dart:io';
 import 'dart:typed_data';
 import 'dart:ui' as ui;
@@ -7,22 +6,16 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:video_player/video_player.dart';
 import 'package:video_thumbnail/video_thumbnail.dart';
+import 'helpers/analyzer_helper.dart';
+import 'helpers/color_grading.dart';
+import 'models/demo_clip.dart';
+import 'models/enhancement_preset.dart';
+import 'widgets/frame_painter.dart';
 import 'widgets/video_preview_card.dart';
 
 // TODO: Refactor main.dart and split models/UI sections into different files to maintain readability
 void main() {
   runApp(const VideoEnhancerApp());
-}
-
-enum SceneFlavor {
-  neutral,
-  portrait,
-  nature,
-  water,
-  night,
-  urban,
-  animation,
-  socialEdit,
 }
 
 class VideoEnhancerApp extends StatelessWidget {
@@ -137,7 +130,7 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
     if (clip == null) {
       return SceneFlavor.neutral;
     }
-    return _sceneFlavorForClip(clip);
+    return AnalyzerHelper.sceneFlavorForClip(clip);
   }
 
   @override
@@ -170,69 +163,8 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
     return weightedScore.clamp(0, 100).round();
   }
 
-  // Infers a scene category from lightweight clip metadata when no manual override is set.
-  SceneFlavor _sceneFlavorForClip(DemoClip clip) {
-    final haystack =
-        '${clip.title} ${clip.location} ${clip.tag}'.toLowerCase();
-
-    if (haystack.contains('portrait') ||
-        haystack.contains('face') ||
-        haystack.contains('selfie') ||
-        haystack.contains('person')) {
-      return SceneFlavor.portrait;
-    }
-    if (haystack.contains('ocean') ||
-        haystack.contains('beach') ||
-        haystack.contains('sea') ||
-        haystack.contains('water')) {
-      return SceneFlavor.water;
-    }
-    if (haystack.contains('forest') ||
-        haystack.contains('nature') ||
-        haystack.contains('park') ||
-        haystack.contains('foliage')) {
-      return SceneFlavor.nature;
-    }
-    if (haystack.contains('night') ||
-        haystack.contains('low light') ||
-        haystack.contains('dark') ||
-        haystack.contains('neon')) {
-      return SceneFlavor.night;
-    }
-    if (haystack.contains('street') ||
-        haystack.contains('city') ||
-        haystack.contains('urban') ||
-        haystack.contains('downtown')) {
-      return SceneFlavor.urban;
-    }
-    if (haystack.contains('animation') ||
-        haystack.contains('anime') ||
-        haystack.contains('cartoon') ||
-        haystack.contains('motion graphic')) {
-      return SceneFlavor.animation;
-    }
-    if (haystack.contains('tiktok') ||
-        haystack.contains('edit') ||
-        haystack.contains('social') ||
-        haystack.contains('reel') ||
-        haystack.contains('shorts')) {
-      return SceneFlavor.socialEdit;
-    }
-    return SceneFlavor.neutral;
-  }
-
-  // Converts internal scene enum values into user-facing labels.
   String _sceneFlavorLabel(SceneFlavor flavor) {
-    return switch (flavor) {
-      SceneFlavor.neutral => 'Neutral',
-      SceneFlavor.portrait => 'Portrait',
-      SceneFlavor.nature => 'Nature',
-      SceneFlavor.water => 'Water',
-      SceneFlavor.night => 'Night',
-      SceneFlavor.urban => 'Urban',
-      SceneFlavor.animation => 'Animation',
-      SceneFlavor.socialEdit => 'Social Edit',
-    };
+    return AnalyzerHelper.sceneFlavorLabel(flavor);
   }
 
   // Stores the user's explicit scene override choice, or returns to auto mode with null.
@@ -262,175 +194,23 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
     String summary,
     List<String> signals,
   })> _analyzeClipRecommendation(DemoClip clip) async {
-    final scene = _currentSceneFlavor;
-    final title = clip.title.toLowerCase();
-    final frameStats = await _analyzeVideoFrames(clip);
-
-    // One running score per preset. Higher means the clip characteristics match that look better.
-    final scores = [0, 0, 0, 0];
-
-    // Scene type acts as a low-strength prior rather than a hard rule.
-    // This helps the analyzer start in the right neighborhood without forcing a preset.
-    //
-    // Examples:
-    // - portrait clips slightly prefer Balanced because it is the safest natural look
-    // - night clips lean toward Low-Light Rescue and Cinematic
-    // - animation/social edits lean toward Vivid because those clips usually tolerate stronger stylizing
-    switch (scene) {
-      case SceneFlavor.portrait:
-        scores[0] += 2;
-        scores[1] += 1;
-      case SceneFlavor.water:
-      case SceneFlavor.nature:
-        scores[2] += 2;
-        scores[0] += 1;
-      case SceneFlavor.night:
-        scores[3] += 2;
-        scores[1] += 2;
-      case SceneFlavor.urban:
-        scores[1] += 2;
-        scores[2] += 1;
-      case SceneFlavor.animation:
-      case SceneFlavor.socialEdit:
-        scores[2] += 2;
-        scores[1] += 1;
-        scores[0] += 1;
-      case SceneFlavor.neutral:
-        scores[0] += 1;
-    }
-
-    if (frameStats != null) {
-      // Frame stats are the most important part of the recommendation.
-      // They come from five sampled frames and describe how the video actually looks on average.
-      //
-      // The thresholds below are tuned to create clear preset personalities:
-      // - dark / shadow-heavy footage strongly favors Low-Light Rescue
-      // - colorful footage strongly favors Vivid
-      // - high-contrast or warm footage leans Cinematic
-      // - flatter, restrained footage tends to favor Balanced
-      if (frameStats.darkRatio >= 0.34 || frameStats.brightness <= 0.40) {
-        // A large dark-pixel share usually means underexposed or shadow-heavy footage.
-        // Low-Light Rescue is designed to lift and protect that kind of material.
-        scores[3] += 4;
-      }
-      if (frameStats.highlightRatio >= 0.18) {
-        // Lots of bright pixels can mean highlight pressure.
-        // Balanced gets a boost for safer cleanup, while Low-Light Rescue gets a smaller
-        // boost because its protective tone shaping can also help preserve bright areas.
-        scores[0] += 2;
-        scores[3] += 1;
-      }
-      if (frameStats.saturation >= 0.36) {
-        // Already-colorful footage usually benefits from Vivid's punchier identity.
-        scores[2] += 4;
-      } else if (frameStats.saturation <= 0.20) {
-        // Muted footage is often better served by a controlled corrective look first.
-        scores[0] += 2;
-      }
-      if (frameStats.contrast >= 0.24) {
-        // Strong contrast aligns well with Cinematic, with a small spillover toward Vivid.
-        scores[1] += 3;
-        scores[2] += 1;
-      } else if (frameStats.contrast <= 0.16) {
-        // Lower-contrast footage can read as flatter or softer, which tends to fit either
-        // a neutral cleanup pass or a shadow-recovery pass.
-        scores[0] += 2;
-        scores[3] += 1;
-      }
-      if (frameStats.warmth >= 0.05) {
-        // Warmer footage is a natural fit for Cinematic's highlight shaping and overall tone.
-        scores[1] += 2;
-        scores[0] += 1;
-      } else if (frameStats.warmth <= -0.04) {
-        // Cooler footage often pairs better with Vivid's fresher color energy, with a small
-        // allowance for Low-Light Rescue when cool tones come from darker environments.
-        scores[2] += 2;
-        scores[3] += 1;
-      }
-    }
-
-    // Filename cues are intentionally weak. They should help when obvious, but never dominate
-    // actual frame analysis from the imported video.
-    if (title.contains('edit') ||
-        title.contains('tiktok') ||
-        title.contains('reel') ||
-        title.contains('anime') ||
-        title.contains('music')) {
-      scores[2] += 2;
-    }
-
-    if (title.contains('night') ||
-        title.contains('dark') ||
-        title.contains('low')) {
-      scores[3] += 2;
-    }
-
-    if (title.contains('cinema') ||
-        title.contains('film') ||
-        title.contains('drive') ||
-        title.contains('city')) {
-      scores[1] += 2;
-    }
-
-    if (title.contains('portrait') || title.contains('face')) {
-      scores[0] += 2;
-    }
-
-    // Pick the preset with the highest accumulated score.
-    var presetIndex = 0;
-    for (var i = 1; i < scores.length; i++) {
-      if (scores[i] > scores[presetIndex]) {
-        presetIndex = i;
-      }
-    }
-
-    // Confidence is based on separation between the best and second-best scores.
-    // A narrow margin means the clip could plausibly fit more than one look, while
-    // a wide margin means one preset clearly stood out from the others.
-    final sorted = [...scores]..sort();
-    final margin = sorted.last - sorted[sorted.length - 2];
-    final confidenceFloor = frameStats == null ? 66 : 76;
-    final confidenceCeiling = frameStats == null ? 90 : 97;
-    final confidence =
-        (confidenceFloor + (margin * 5)).clamp(confidenceFloor, confidenceCeiling);
-
-    // The user-facing summary explains the winning preset in plain language.
-    final summary = switch (presetIndex) {
-      0 => 'Balanced is recommended because the sampled frames look relatively controlled and natural, so a clean corrective pass should preserve detail best.',
-      1 => 'Cinematic is recommended because the sampled frames show stronger contrast or warmth, which suits a more dramatic, filmic treatment.',
-      2 => 'Vivid is recommended because the sampled frames already carry color energy, so extra pop and crispness should read well.',
-      _ => 'Low-Light Rescue is recommended because the sampled frames skew darker or shadow-heavier, so a more protective lift should hold detail better.',
-    };
-
-    final strongestSignal = switch (scene) {
-      SceneFlavor.neutral => 'Auto scene detection is inconclusive',
-      _ => 'Detected scene: ${_sceneFlavorLabel(scene)}',
-    };
-
-    // These insight pills expose the strongest signals that led to the recommendation.
-    final signals = frameStats == null
-        ? <String>[
-            strongestSignal,
-            'Frame sampling unavailable, using clip metadata fallback',
-            'Recommended look: ${_presets[presetIndex].title}',
-          ]
-        : <String>[
-            strongestSignal,
-            '5 frames sampled: B${(frameStats.brightness * 100).round()} C${(frameStats.contrast * 100).round()} S${(frameStats.saturation * 100).round()}',
-            'Shadow load ${(frameStats.darkRatio * 100).round()}% • Highlights ${(frameStats.highlightRatio * 100).round()}%',
-            'Recommended look: ${_presets[presetIndex].title}',
-          ];
+    final recommendation = AnalyzerHelper.analyzeRecommendation(
+      clip: clip,
+      scene: _currentSceneFlavor,
+      frameStats: await _analyzeVideoFrames(clip),
+      presetTitles: _presets.map((preset) => preset.title).toList(),
+    );
 
     return (
-      presetIndex: presetIndex,
-      confidence: confidence,
-      summary: summary,
-      signals: signals,
+      presetIndex: recommendation.presetIndex,
+      confidence: recommendation.confidence,
+      summary: recommendation.summary,
+      signals: recommendation.signals,
     );
   }
 
   // Samples multiple points in the video and averages their image statistics into one profile.
-  Future<_FrameAnalysisStats?> _analyzeVideoFrames(DemoClip clip) async {
+  Future<FrameAnalysisStats?> _analyzeVideoFrames(DemoClip clip) async {
     final filePath = clip.filePath;
     if (filePath == null || filePath.isEmpty) {
       return null;
@@ -440,140 +220,11 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
             _videoController?.value.isInitialized == true
         ? _videoController!.value.duration.inMilliseconds
         : 0;
-    final sampleTimes = _buildAnalysisSampleTimes(
-      durationMs > 0 ? durationMs : 6000,
+    return AnalyzerHelper.analyzeVideoFrames(
+      filePath: filePath,
+      durationMs: durationMs > 0 ? durationMs : 6000,
       seed: filePath.hashCode ^ clip.title.hashCode,
     );
-
-    final samples = <_FrameAnalysisStats>[];
-    for (final timeMs in sampleTimes) {
-      final thumbnailBytes = await VideoThumbnail.thumbnailData(
-        video: filePath,
-        imageFormat: ImageFormat.PNG,
-        timeMs: timeMs,
-        quality: 45,
-        maxWidth: 144,
-      );
-      if (thumbnailBytes == null) {
-        continue;
-      }
-      final stats = await _analyzeImageBytes(thumbnailBytes);
-      if (stats != null) {
-        samples.add(stats);
-      }
-    }
-
-    if (samples.isEmpty) {
-      return null;
-    }
-
-    double average(double Function(_FrameAnalysisStats sample) valueOf) {
-      final total = samples.fold<double>(
-        0,
-        (sum, sample) => sum + valueOf(sample),
-      );
-      return total / samples.length;
-    }
-
-    return _FrameAnalysisStats(
-      brightness: average((sample) => sample.brightness),
-      contrast: average((sample) => sample.contrast),
-      saturation: average((sample) => sample.saturation),
-      warmth: average((sample) => sample.warmth),
-      darkRatio: average((sample) => sample.darkRatio),
-      highlightRatio: average((sample) => sample.highlightRatio),
-    );
-  }
-
-  // Picks five spread-out pseudo-random timestamps so analysis is less biased to one moment.
-  List<int> _buildAnalysisSampleTimes(int durationMs, {required int seed}) {
-    final safeDurationMs = math.max(durationMs, 1500);
-    final startMs = (safeDurationMs * 0.08).round();
-    final endMs = (safeDurationMs * 0.92).round();
-    final rangeMs = math.max(endMs - startMs, 1);
-    final random = math.Random(seed);
-
-    return List.generate(5, (index) {
-      final bucketStart = startMs + ((rangeMs * index) ~/ 5);
-      final bucketEnd = startMs + ((rangeMs * (index + 1)) ~/ 5);
-      final bucketWidth = math.max(bucketEnd - bucketStart, 1);
-      return bucketStart + random.nextInt(bucketWidth);
-    });
-  }
-
-  // Reads raw RGBA pixels from a generated frame and derives simple tone/color metrics.
-  Future<_FrameAnalysisStats?> _analyzeImageBytes(Uint8List bytes) async {
-    final codec = await ui.instantiateImageCodec(bytes);
-    final frame = await codec.getNextFrame();
-    final image = frame.image;
-    try {
-      final byteData = await image.toByteData(format: ui.ImageByteFormat.rawRgba);
-      if (byteData == null) {
-        return null;
-      }
-
-      final pixels = byteData.buffer.asUint8List();
-      var pixelCount = 0;
-      var luminanceSum = 0.0;
-      var luminanceSquaredSum = 0.0;
-      var saturationSum = 0.0;
-      var warmthSum = 0.0;
-      var darkPixels = 0;
-      var highlightPixels = 0;
-
-      for (var i = 0; i <= pixels.length - 4; i += 16) {
-        final red = pixels[i] / 255;
-        final green = pixels[i + 1] / 255;
-        final blue = pixels[i + 2] / 255;
-        final alpha = pixels[i + 3] / 255;
-
-        if (alpha < 0.1) {
-          continue;
-        }
-
-        final maxChannel = math.max(red, math.max(green, blue));
-        final minChannel = math.min(red, math.min(green, blue));
-        final luminance = (0.2126 * red) + (0.7152 * green) + (0.0722 * blue);
-        final saturation = maxChannel == 0
-            ? 0.0
-            : (maxChannel - minChannel) / maxChannel;
-        final warmth = ((red - blue) + ((red - green) * 0.35)).clamp(-1.0, 1.0);
-
-        pixelCount++;
-        luminanceSum += luminance;
-        luminanceSquaredSum += luminance * luminance;
-        saturationSum += saturation;
-        warmthSum += warmth;
-        if (luminance <= 0.18) {
-          darkPixels++;
-        }
-        if (luminance >= 0.82) {
-          highlightPixels++;
-        }
-      }
-
-      if (pixelCount == 0) {
-        return null;
-      }
-
-      final brightness = luminanceSum / pixelCount;
-      final variance = math.max(
-        (luminanceSquaredSum / pixelCount) - (brightness * brightness),
-        0.0,
-      );
-
-      return _FrameAnalysisStats(
-        brightness: brightness,
-        contrast: math.sqrt(variance),
-        saturation: saturationSum / pixelCount,
-        warmth: warmthSum / pixelCount,
-        darkRatio: darkPixels / pixelCount,
-        highlightRatio: highlightPixels / pixelCount,
-      );
-    } finally {
-      image.dispose();
-      codec.dispose();
-    }
   }
 
   // Clears the active preset without disturbing the current manual slider values.
@@ -933,7 +584,7 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
                   _buildMetricTile(
                     'Scene type',
                     _sceneOverride == null
-                        ? 'Auto • ${_sceneFlavorLabel(_currentSceneFlavor)}'
+                        ? 'Auto - ${_sceneFlavorLabel(_currentSceneFlavor)}'
                         : _sceneFlavorLabel(_currentSceneFlavor),
                   ),
                   const SizedBox(height: 12),
@@ -995,57 +646,6 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
       },
       viewport: _buildPreviewViewport(),
     );
-    // ignore: dead_code
-    return Card(
-      key: _previewSectionKey,
-      child: Padding(
-        padding: const EdgeInsets.all(22),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        'Preview',
-                        style: Theme.of(context).textTheme.headlineSmall
-                            ?.copyWith(fontWeight: FontWeight.w800),
-                      ),
-                      const SizedBox(height: 6),
-                      Text(
-                        selectedClip == null
-                            ? 'Import a video to start previewing'
-                            : '${selectedClip.location} • ${selectedClip.duration}',
-                        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                          color: Colors.white60,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                SegmentedButton<bool>(
-                  segments: const [
-                    ButtonSegment<bool>(value: false, label: Text('Before')),
-                    ButtonSegment<bool>(value: true, label: Text('After')),
-                  ],
-                  selected: {_showAfter},
-                  onSelectionChanged: (selection) {
-                    setState(() {
-                      _showAfter = selection.first;
-                    });
-                  },
-                ),
-              ],
-            ),
-            const SizedBox(height: 18),
-            _buildPreviewViewport(),
-          ],
-        ),
-      ),
-    );
   }
 
   Widget _buildPreviewViewport() {
@@ -1059,197 +659,95 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
     final showVividOverlay = _showAfter && _selectedPresetIndex == 2;
     final showLowLightOverlay = _showAfter && _selectedPresetIndex == 3;
 
-    return AspectRatio(
+    return VideoPreviewViewport(
       aspectRatio: hasVideo ? controller.value.aspectRatio : 16 / 9,
-      child: Container(
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(28),
-          gradient: LinearGradient(
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-            colors: _showAfter
-                ? [
-                    (selectedClip?.accent ?? const Color(0xFF4FA3FF)).withValues(
-                      alpha: 0.30,
-                    ),
-                    const Color(0xFF172842),
-                    const Color(0xFF0A1423),
-                  ]
-                : [
-                    const Color(0xFF3A4658),
-                    const Color(0xFF202A38),
-                    const Color(0xFF121823),
-                  ],
-          ),
-        ),
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(28),
-          child: Stack(
-            fit: StackFit.expand,
-            children: [
-              if (hasVideo)
-                FittedBox(
-                  fit: BoxFit.cover,
-                  child: SizedBox(
-                    width: controller.value.size.width,
-                    height: controller.value.size.height,
-                    child: _buildFilteredVideo(controller),
-                  ),
-                )
-              else
-                if (selectedClip != null)
-                  CustomPaint(
-                    painter: FramePainter(
-                      accent: selectedClip.accent,
-                      emphasizeEnhancement: _showAfter,
-                    ),
-                  )
-                else
-                  Container(
-                    alignment: Alignment.center,
-                    padding: const EdgeInsets.all(24),
-                    child: const Text(
-                      'No imported video yet.\nUse Import Video to add one to the queue.',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                        color: Colors.white70,
-                        height: 1.5,
-                        fontSize: 16,
-                      ),
-                    ),
-                  ),
-              if (showBalancedOverlay)
-                IgnorePointer(
-                  child: _buildBalancedPresetOverlay(),
-                ),
-              if (showCinematicOverlay)
-                IgnorePointer(
-                  child: _buildCinematicPresetOverlay(),
-                ),
-              if (showVividOverlay)
-                IgnorePointer(
-                  child: _buildVividPresetOverlay(),
-                ),
-              if (showLowLightOverlay)
-                IgnorePointer(
-                  child: _buildLowLightPresetOverlay(),
-                ),
-              if (_showAfter && _selectedPresetIndex >= 0)
-                IgnorePointer(
-                  child: _buildSelectiveColorOverlay(),
-                ),
-              if (_showAfter && _selectedClip != null)
-                IgnorePointer(
-                  child: _buildSceneAwareOverlay(),
-                ),
-              if (hasVideo)
-                Positioned.fill(
-                  child: GestureDetector(
-                    behavior: HitTestBehavior.opaque,
-                    onTap: () {
-                      setState(() {
-                        _showPreviewControls = !_showPreviewControls;
-                      });
-                    },
-                  ),
-                ),
-              if (_isPreviewLoading)
-                Container(
-                  color: Colors.black.withValues(alpha: 0.32),
-                  child: const Center(
-                    child: CircularProgressIndicator(),
-                  ),
-                ),
-              if (hasSelectedClip)
-                Positioned(
-                  top: 18,
-                  left: 18,
-                  child: IgnorePointer(
-                    ignoring: !showPlaybackControls,
-                    child: AnimatedOpacity(
-                      duration: const Duration(milliseconds: 220),
-                      opacity: showPlaybackControls ? 1 : 0,
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 12,
-                          vertical: 8,
-                        ),
-                        decoration: BoxDecoration(
-                          color: Colors.black.withValues(alpha: 0.26),
-                          borderRadius: BorderRadius.circular(999),
-                        ),
-                        child: Text(
-                          hasVideo
-                              ? (_showAfter ? 'Imported Preview' : 'Original File')
-                              : (_showAfter
-                                  ? 'Enhanced Preview'
-                                  : 'Original Preview'),
-                          style: const TextStyle(fontWeight: FontWeight.w600),
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-              if (hasSelectedClip)
-                Center(
-                  child: IgnorePointer(
-                    ignoring: !showPlaybackControls,
-                    child: AnimatedOpacity(
-                      duration: const Duration(milliseconds: 220),
-                      opacity: showPlaybackControls ? 1 : 0,
-                      child: GestureDetector(
-                        onTap: hasVideo
-                            ? () {
-                                setState(() {
-                                  if (controller.value.isPlaying) {
-                                    controller.pause();
-                                    _showPreviewControls = true;
-                                  } else {
-                                    controller.play();
-                                    _showPreviewControls = false;
-                                  }
-                                });
-                              }
-                            : null,
-                        child: Container(
-                          width: 78,
-                          height: 78,
-                          decoration: BoxDecoration(
-                            color: Colors.white.withValues(alpha: 0.12),
-                            shape: BoxShape.circle,
-                            border: Border.all(
-                              color: Colors.white.withValues(alpha: 0.18),
-                            ),
-                          ),
-                          child: Icon(
-                            hasVideo && controller.value.isPlaying
-                                ? Icons.pause_rounded
-                                : Icons.play_arrow_rounded,
-                            size: 42,
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-              if (hasVideo)
-                Positioned(
-                  left: 18,
-                  right: 18,
-                  bottom: 18,
-                  child: IgnorePointer(
-                    ignoring: !showPlaybackControls,
-                    child: AnimatedOpacity(
-                      duration: const Duration(milliseconds: 220),
-                      opacity: showPlaybackControls ? 1 : 0,
-                      child: PlaybackTimelineOverlay(controller: controller),
-                    ),
-                  ),
-                ),
+      backgroundColors: _showAfter
+          ? [
+              (selectedClip?.accent ?? const Color(0xFF4FA3FF)).withValues(
+                alpha: 0.30,
+              ),
+              const Color(0xFF172842),
+              const Color(0xFF0A1423),
+            ]
+          : [
+              const Color(0xFF3A4658),
+              const Color(0xFF202A38),
+              const Color(0xFF121823),
             ],
-          ),
-        ),
-      ),
+      media: hasVideo
+          ? FittedBox(
+              fit: BoxFit.cover,
+              child: SizedBox(
+                width: controller.value.size.width,
+                height: controller.value.size.height,
+                child: _buildFilteredVideo(controller),
+              ),
+            )
+          : selectedClip != null
+          ? CustomPaint(
+              painter: FramePainter(
+                accent: selectedClip.accent,
+                emphasizeEnhancement: _showAfter,
+              ),
+            )
+          : const EmptyPreviewMessage(),
+      effectOverlays: [
+        if (showBalancedOverlay) IgnorePointer(child: _buildBalancedPresetOverlay()),
+        if (showCinematicOverlay)
+          IgnorePointer(child: _buildCinematicPresetOverlay()),
+        if (showVividOverlay) IgnorePointer(child: _buildVividPresetOverlay()),
+        if (showLowLightOverlay)
+          IgnorePointer(child: _buildLowLightPresetOverlay()),
+        if (_showAfter && _selectedPresetIndex >= 0)
+          IgnorePointer(child: _buildSelectiveColorOverlay()),
+        if (_showAfter && selectedClip != null)
+          IgnorePointer(child: _buildSceneAwareOverlay()),
+      ],
+      isPreviewLoading: _isPreviewLoading,
+      onBackgroundTap: hasVideo
+          ? () {
+              setState(() {
+                _showPreviewControls = !_showPreviewControls;
+              });
+            }
+          : null,
+      topLeftBadge: hasSelectedClip
+          ? PreviewStatusBadge(
+              label: hasVideo
+                  ? (_showAfter ? 'Imported Preview' : 'Original File')
+                  : (_showAfter ? 'Enhanced Preview' : 'Original Preview'),
+              visible: showPlaybackControls,
+            )
+          : null,
+      centerControl: hasSelectedClip
+          ? PreviewPlaybackButton(
+              visible: showPlaybackControls,
+              isPlaying: hasVideo && controller.value.isPlaying,
+              onTap: hasVideo
+                  ? () {
+                      setState(() {
+                        if (controller.value.isPlaying) {
+                          controller.pause();
+                          _showPreviewControls = true;
+                        } else {
+                          controller.play();
+                          _showPreviewControls = false;
+                        }
+                      });
+                    }
+                  : null,
+            )
+          : null,
+      bottomOverlay: hasVideo
+          ? IgnorePointer(
+              ignoring: !showPlaybackControls,
+              child: AnimatedOpacity(
+                duration: const Duration(milliseconds: 220),
+                opacity: showPlaybackControls ? 1 : 0,
+                child: PlaybackTimelineOverlay(controller: controller),
+              ),
+            )
+          : null,
     );
   }
 
@@ -1351,66 +849,6 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
           ],
         ),
       ),
-    );
-  }
-
-  Widget _buildPlaybackTimeline(VideoPlayerController controller) {
-    return ValueListenableBuilder<VideoPlayerValue>(
-      valueListenable: controller,
-      builder: (context, value, child) {
-        final totalMs = math.max(value.duration.inMilliseconds, 1);
-        final currentMs = value.position.inMilliseconds.clamp(0, totalMs);
-
-        return Container(
-          padding: const EdgeInsets.fromLTRB(12, 10, 12, 8),
-          decoration: BoxDecoration(
-            color: Colors.black.withValues(alpha: 0.34),
-            borderRadius: BorderRadius.circular(18),
-            border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
-          ),
-          child: Column(
-            children: [
-              SliderTheme(
-                data: SliderTheme.of(context).copyWith(
-                  trackHeight: 4,
-                  thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6),
-                  overlayShape: const RoundSliderOverlayShape(overlayRadius: 14),
-                  activeTrackColor: Colors.white,
-                  inactiveTrackColor: Colors.white.withValues(alpha: 0.24),
-                  thumbColor: Colors.white,
-                ),
-                child: Slider(
-                  value: currentMs.toDouble(),
-                  min: 0,
-                  max: totalMs.toDouble(),
-                  onChanged: (nextValue) {
-                    controller.seekTo(Duration(milliseconds: nextValue.round()));
-                  },
-                ),
-              ),
-              Row(
-                children: [
-                  Text(
-                    _formatDuration(Duration(milliseconds: currentMs)),
-                    style: const TextStyle(
-                      color: Colors.white70,
-                      fontFeatures: [ui.FontFeature.tabularFigures()],
-                    ),
-                  ),
-                  const Spacer(),
-                  Text(
-                    _formatDuration(value.duration),
-                    style: const TextStyle(
-                      color: Colors.white70,
-                      fontFeatures: [ui.FontFeature.tabularFigures()],
-                    ),
-                  ),
-                ],
-              ),
-            ],
-          ),
-        );
-      },
     );
   }
 
@@ -1527,107 +965,26 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
     final selectedClip = _selectedClip;
     final controller = _videoController;
     final hasVideo = controller != null && controller.value.isInitialized;
-    const shellRadius = Radius.circular(22);
+    final thumbnailBytes = selectedClip?.filePath == null
+        ? null
+        : _clipThumbnails[selectedClip!.filePath!];
 
-    return Material(
-      color: Colors.transparent,
-      clipBehavior: Clip.antiAlias,
-      borderRadius: const BorderRadius.all(shellRadius),
-      child: InkWell(
-        onTap: _jumpToPreview,
-        borderRadius: const BorderRadius.all(shellRadius),
-        child: Ink(
-          width: 184,
-          decoration: BoxDecoration(
-            color: const Color(0xFF101A2B).withValues(alpha: 0.96),
-            borderRadius: const BorderRadius.all(shellRadius),
-            border: Border.all(color: const Color(0xFF2A3C5E)),
-            boxShadow: const [
-              BoxShadow(
-                color: Color(0x66000000),
-                blurRadius: 18,
-                offset: Offset(0, 10),
+    return MiniPreviewCard(
+      title: selectedClip?.title ?? 'Preview',
+      onTap: _jumpToPreview,
+      media: hasVideo
+          ? FittedBox(
+              fit: BoxFit.cover,
+              child: SizedBox(
+                width: controller.value.size.width,
+                height: controller.value.size.height,
+                child: _buildFilteredVideo(controller),
               ),
-            ],
-          ),
-          child: Padding(
-            padding: const EdgeInsets.all(10),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                ClipRRect(
-                  borderRadius: BorderRadius.circular(16),
-                  child: SizedBox(
-                    height: 96,
-                    width: double.infinity,
-                    child: hasVideo
-                        ? FittedBox(
-                            fit: BoxFit.cover,
-                            child: SizedBox(
-                              width: controller.value.size.width,
-                              height: controller.value.size.height,
-                              child: _buildFilteredVideo(controller),
-                            ),
-                          )
-                        : _buildMiniPreviewFallback(selectedClip),
-                  ),
-                ),
-                const SizedBox(height: 10),
-                Text(
-                  selectedClip?.title ?? 'Preview',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    fontWeight: FontWeight.w700,
-                    fontSize: 13,
-                  ),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  'Tap to return to preview',
-                  style: TextStyle(
-                    fontSize: 11,
-                    color: Colors.white.withValues(alpha: 0.72),
-                  ),
-                ),
-              ],
+            )
+          : MiniPreviewFallback(
+              thumbnailBytes: thumbnailBytes,
+              accentColor: selectedClip?.accent,
             ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildMiniPreviewFallback(DemoClip? selectedClip) {
-    if (selectedClip == null) {
-      return Container(
-        color: const Color(0xFF13213A),
-      );
-    }
-
-    final filePath = selectedClip.filePath;
-    final thumbnailBytes =
-        filePath == null ? null : _clipThumbnails[filePath];
-
-    if (thumbnailBytes != null) {
-      return Image.memory(
-        thumbnailBytes,
-        fit: BoxFit.cover,
-      );
-    }
-
-    return Container(
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          colors: [
-            selectedClip.accent.withValues(alpha: 0.55),
-            const Color(0xFF101B2D),
-          ],
-        ),
-      ),
-      child: const Center(
-        child: Icon(Icons.video_collection_rounded, size: 28),
-      ),
     );
   }
 
@@ -2179,136 +1536,21 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
 
   // Builds the combined color matrix for the After view from manual controls and preset effects.
   List<double> _buildAdjustmentMatrix() {
-    final brightnessOffset = (_brightness - 50) * 2.2;
-    final contrastValue = 0.7 + (_contrast / 100) * 0.9;
-    final saturationValue = 0.35 + (_saturation / 100) * 1.3;
-    final warmthShift = (_warmth - 50) / 100 * 28;
-    final tintShift = (_tint - 50) / 100 * 20;
-    final highlightsOffset = (50 - _highlights) * 0.8;
-    final shadowsOffset = (_shadows - 50) * 0.7;
-    final presetStrength = _showAfter ? _presetStrength : 0.0;
-    final curve = _presetToneCurve(presetStrength);
-    final clarityBoost = switch (_selectedPresetIndex) {
-      0 when _showAfter => 1.0 + (0.05 * presetStrength),
-      2 when _showAfter => 1.0 + (0.08 * presetStrength),
-      _ => 1.0,
-    };
-    final cinematicFade =
-        _showAfter && _selectedPresetIndex == 1 ? 10.0 * presetStrength : 0.0;
-    final lowLightLift =
-        _showAfter && _selectedPresetIndex == 3 ? 8.0 * presetStrength : 0.0;
-
-    final contrastMatrix = _contrastMatrix(
-      contrastValue,
-      translate: 128 * (1 - contrastValue),
+    final sceneTone = _sceneToneAdjustment();
+    return ColorGrading.buildAdjustmentMatrix(
+      brightness: _brightness,
+      contrast: _contrast,
+      saturation: _saturation,
+      warmth: _warmth,
+      tint: _tint,
+      highlights: _highlights,
+      shadows: _shadows,
+      showAfter: _showAfter,
+      presetStrength: _presetStrength,
+      selectedPresetIndex: _selectedPresetIndex,
+      sceneTintShift: sceneTone.tintShift,
+      sceneBrightnessLift: sceneTone.brightnessLift,
     );
-    final saturationMatrix = _saturationMatrix(saturationValue);
-    final warmthMatrix = _warmthMatrix(warmthShift);
-    final tintMatrix = _tintMatrix(tintShift);
-    final brightnessMatrix = _brightnessMatrix(brightnessOffset);
-    final clarityMatrix = _contrastMatrix(
-      clarityBoost,
-      translate: 128 * (1 - clarityBoost),
-    );
-    final fadeMatrix = _brightnessMatrix(cinematicFade);
-    final lowLightLiftMatrix = _brightnessMatrix(lowLightLift);
-    final highlightsMatrix = _brightnessMatrix(highlightsOffset);
-    final shadowsMatrix = _brightnessMatrix(shadowsOffset);
-    final sceneTintMatrix = _tintMatrix(_sceneToneAdjustment().tintShift);
-    final sceneBrightnessMatrix = _brightnessMatrix(
-      _sceneToneAdjustment().brightnessLift,
-    );
-    final curveShadowLiftMatrix = _brightnessMatrix(curve.shadowLift);
-    final curveMidtoneMatrix = _brightnessMatrix(curve.midtoneLift);
-    final curveContrastMatrix = _contrastMatrix(
-      curve.contrast,
-      translate: 128 * (1 - curve.contrast) + curve.blackLift,
-    );
-
-    return _multiplyColorMatrices(
-      sceneBrightnessMatrix,
-      _multiplyColorMatrices(
-        sceneTintMatrix,
-        _multiplyColorMatrices(
-          curveShadowLiftMatrix,
-          _multiplyColorMatrices(
-            curveMidtoneMatrix,
-            _multiplyColorMatrices(
-              curveContrastMatrix,
-              _multiplyColorMatrices(
-                highlightsMatrix,
-                _multiplyColorMatrices(
-                  shadowsMatrix,
-                  _multiplyColorMatrices(
-                    lowLightLiftMatrix,
-                    _multiplyColorMatrices(
-                      fadeMatrix,
-                      _multiplyColorMatrices(
-                        clarityMatrix,
-                        _multiplyColorMatrices(
-                          brightnessMatrix,
-                          _multiplyColorMatrices(
-                            tintMatrix,
-                            _multiplyColorMatrices(
-                              warmthMatrix,
-                              _multiplyColorMatrices(
-                                saturationMatrix,
-                                contrastMatrix,
-                              ),
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  // Defines per-preset tonal shaping so each preset has a different contrast/black response.
-  ({
-    double contrast,
-    double blackLift,
-    double shadowLift,
-    double midtoneLift,
-  }) _presetToneCurve(double strength) {
-    return switch (_selectedPresetIndex) {
-      0 when _showAfter => (
-          contrast: 1.0 + (0.04 * strength),
-          blackLift: 2.0 * strength,
-          shadowLift: 1.6 * strength,
-          midtoneLift: 0.8 * strength,
-        ),
-      1 when _showAfter => (
-          contrast: 1.0 + (0.08 * strength),
-          blackLift: 7.5 * strength,
-          shadowLift: 0.8 * strength,
-          midtoneLift: -1.2 * strength,
-        ),
-      2 when _showAfter => (
-          contrast: 1.0 + (0.09 * strength),
-          blackLift: 0.5 * strength,
-          shadowLift: -0.6 * strength,
-          midtoneLift: 2.6 * strength,
-        ),
-      3 when _showAfter => (
-          contrast: 1.0 + (0.02 * strength),
-          blackLift: 5.0 * strength,
-          shadowLift: 4.6 * strength,
-          midtoneLift: 1.4 * strength,
-        ),
-      _ => (
-          contrast: 1.0,
-          blackLift: 0.0,
-          shadowLift: 0.0,
-          midtoneLift: 0.0,
-        ),
-    };
   }
 
   // Adds small scene-specific nudges so auto/manual scene selection influences the final grade.
@@ -2327,80 +1569,6 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
       SceneFlavor.socialEdit => (tintShift: 0.8, brightnessLift: 2.2),
       SceneFlavor.neutral => (tintShift: 0.0, brightnessLift: 0.0),
     };
-  }
-
-  // Returns a simple brightness offset matrix.
-  List<double> _brightnessMatrix(double offset) {
-    return [
-      1, 0, 0, 0, offset,
-      0, 1, 0, 0, offset,
-      0, 0, 1, 0, offset,
-      0, 0, 0, 1, 0,
-    ];
-  }
-
-  // Returns a contrast matrix with optional translation to preserve midtone positioning.
-  List<double> _contrastMatrix(double value, {double translate = 0}) {
-    return [
-      value, 0, 0, 0, translate,
-      0, value, 0, 0, translate,
-      0, 0, value, 0, translate,
-      0, 0, 0, 1, 0,
-    ];
-  }
-
-  // Returns a saturation matrix based on luminance-preserving channel weights.
-  List<double> _saturationMatrix(double value) {
-    const lumR = 0.2126;
-    const lumG = 0.7152;
-    const lumB = 0.0722;
-    final inv = 1 - value;
-
-    return [
-      lumR * inv + value, lumG * inv, lumB * inv, 0, 0,
-      lumR * inv, lumG * inv + value, lumB * inv, 0, 0,
-      lumR * inv, lumG * inv, lumB * inv + value, 0, 0,
-      0, 0, 0, 1, 0,
-    ];
-  }
-
-  // Pushes the image warmer or cooler by balancing red against blue.
-  List<double> _warmthMatrix(double shift) {
-    return [
-      1.0, 0, 0, 0, shift,
-      0, 1.0, 0, 0, 0,
-      0, 0, 1.0, 0, -shift,
-      0, 0, 0, 1, 0,
-    ];
-  }
-
-  // Shifts the image along the green-magenta axis to complement warmth.
-  List<double> _tintMatrix(double shift) {
-    return [
-      1.0, 0, 0, 0, shift * 0.45,
-      0, 1.0, 0, 0, -shift,
-      0, 0, 1.0, 0, shift * 0.45,
-      0, 0, 0, 1, 0,
-    ];
-  }
-
-  // Multiplies two 4x5 color matrices so multiple looks can be applied as one filter.
-  List<double> _multiplyColorMatrices(List<double> a, List<double> b) {
-    final result = List<double>.filled(20, 0);
-
-    for (var row = 0; row < 4; row++) {
-      final rowOffset = row * 5;
-      for (var col = 0; col < 5; col++) {
-        result[rowOffset + col] =
-            a[rowOffset] * b[col] +
-            a[rowOffset + 1] * b[col + 5] +
-            a[rowOffset + 2] * b[col + 10] +
-            a[rowOffset + 3] * b[col + 15] +
-            (col == 4 ? a[rowOffset + 4] : 0);
-      }
-    }
-
-    return result;
   }
 
   Widget _buildClipThumbnail(DemoClip clip) {
@@ -2520,10 +1688,10 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
         : '${(file.size / 1024).toStringAsFixed(0)} KB';
 
     if (extension == null || extension.isEmpty) {
-      return 'From device • $sizeLabel';
+      return 'From device - $sizeLabel';
     }
 
-    return '${extension.toUpperCase()} • $sizeLabel';
+    return '${extension.toUpperCase()} - $sizeLabel';
   }
 
   // Formats a video duration into mm:ss for queue and preview labels.
@@ -3116,74 +2284,6 @@ class _InsightPill extends StatelessWidget {
   }
 }
 
-class _FrameAnalysisStats {
-  const _FrameAnalysisStats({
-    required this.brightness,
-    required this.contrast,
-    required this.saturation,
-    required this.warmth,
-    required this.darkRatio,
-    required this.highlightRatio,
-  });
-
-  final double brightness;
-  final double contrast;
-  final double saturation;
-  final double warmth;
-  final double darkRatio;
-  final double highlightRatio;
-}
-
-class DemoClip {
-  const DemoClip({
-    required this.title,
-    required this.location,
-    required this.duration,
-    required this.accent,
-    required this.tag,
-    this.filePath,
-  });
-
-  final String title;
-  final String location;
-  final String duration;
-  final Color accent;
-  final String tag;
-  final String? filePath;
-
-  DemoClip copyWith({
-    String? title,
-    String? location,
-    String? duration,
-    Color? accent,
-    String? tag,
-    String? filePath,
-  }) {
-    return DemoClip(
-      title: title ?? this.title,
-      location: location ?? this.location,
-      duration: duration ?? this.duration,
-      accent: accent ?? this.accent,
-      tag: tag ?? this.tag,
-      filePath: filePath ?? this.filePath,
-    );
-  }
-}
-
-class EnhancementPreset {
-  const EnhancementPreset({
-    required this.title,
-    required this.subtitle,
-    required this.accent,
-    required this.icon,
-  });
-
-  final String title;
-  final String subtitle;
-  final Color accent;
-  final IconData icon;
-}
-
 class _ScrollerFade extends StatelessWidget {
   const _ScrollerFade({
     required this.begin,
@@ -3211,70 +2311,3 @@ class _ScrollerFade extends StatelessWidget {
   }
 }
 
-class FramePainter extends CustomPainter {
-  FramePainter({
-    required this.accent,
-    required this.emphasizeEnhancement,
-  });
-
-  final Color accent;
-  final bool emphasizeEnhancement;
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final fill = Paint()
-      ..shader = LinearGradient(
-        begin: Alignment.topLeft,
-        end: Alignment.bottomRight,
-        colors: [
-          accent.withValues(alpha: emphasizeEnhancement ? 0.28 : 0.12),
-          Colors.transparent,
-          Colors.white.withValues(alpha: emphasizeEnhancement ? 0.08 : 0.03),
-        ],
-      ).createShader(Offset.zero & size);
-
-    canvas.drawRRect(
-      RRect.fromRectAndRadius(
-        Offset.zero & size,
-        const Radius.circular(28),
-      ),
-      fill,
-    );
-
-    final stroke = Paint()
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = emphasizeEnhancement ? 2.3 : 1.4
-      ..color = accent.withValues(alpha: emphasizeEnhancement ? 0.55 : 0.22);
-
-    final wave = Path()..moveTo(0, size.height * 0.76);
-    for (double x = 0; x <= size.width; x += 12) {
-      final progress = x / size.width;
-      final amplitude = emphasizeEnhancement ? 22.0 : 14.0;
-      final y =
-          size.height * 0.68 +
-          math.sin(progress * math.pi * 2.8) * amplitude +
-          math.cos(progress * math.pi * 5.6) * 7;
-      wave.lineTo(x, y);
-    }
-
-    canvas.drawPath(wave, stroke);
-
-    final glow = Paint()
-      ..color = Colors.white.withValues(
-        alpha: emphasizeEnhancement ? 0.10 : 0.05,
-      )
-      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 18);
-
-    canvas.drawCircle(
-      Offset(size.width * 0.76, size.height * 0.30),
-      emphasizeEnhancement ? 78 : 52,
-      glow,
-    );
-  }
-
-  @override
-  bool shouldRepaint(covariant FramePainter oldDelegate) {
-    return oldDelegate.accent != accent ||
-        oldDelegate.emphasizeEnhancement != emphasizeEnhancement;
-  }
-}
