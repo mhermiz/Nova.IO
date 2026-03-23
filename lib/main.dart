@@ -20,7 +20,7 @@ enum SceneFlavor {
   night,
   urban,
   animation,
-  media,
+  socialEdit,
 }
 
 class VideoEnhancerApp extends StatelessWidget {
@@ -112,6 +112,15 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
   bool _isPreviewLoading = false;
   final Map<String, Uint8List> _clipThumbnails = {};
   bool _showPreviewJumpButton = false;
+  int? _analysisRecommendedPresetIndex;
+  int _analysisConfidence = 0;
+  String _analysisSummary =
+      'Run analysis to get a smarter preset recommendation for the selected clip.';
+  List<String> _analysisSignals = const [
+    'Scene detection idle',
+    'Tonal profile pending',
+    'Preset recommendation pending',
+  ];
 
   DemoClip? get _selectedClip =>
       _clips.isEmpty ? null : _clips[_selectedClipIndex];
@@ -129,6 +138,7 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
   }
 
   @override
+  // Sets up scroll-driven UI state and loads a preview controller if a clip exists.
   void initState() {
     super.initState();
     _scrollController.addListener(_handleScroll);
@@ -137,6 +147,7 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
   }
 
   @override
+  // Cleans up controllers created for scrolling and video playback.
   void dispose() {
     _scrollController.removeListener(_handleScroll);
     _scrollController.dispose();
@@ -144,6 +155,7 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
     super.dispose();
   }
 
+  // Generates a demo quality score from the current tuning state for the summary UI.
   int get _qualityScore {
     final weightedScore =
         (_brightness * 0.21) +
@@ -155,6 +167,7 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
     return weightedScore.clamp(0, 100).round();
   }
 
+  // Infers a scene category from lightweight clip metadata when no manual override is set.
   SceneFlavor _sceneFlavorForClip(DemoClip clip) {
     final haystack =
         '${clip.title} ${clip.location} ${clip.tag}'.toLowerCase();
@@ -200,11 +213,12 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
         haystack.contains('social') ||
         haystack.contains('reel') ||
         haystack.contains('shorts')) {
-      return SceneFlavor.media;
+      return SceneFlavor.socialEdit;
     }
     return SceneFlavor.neutral;
   }
 
+  // Converts internal scene enum values into user-facing labels.
   String _sceneFlavorLabel(SceneFlavor flavor) {
     return switch (flavor) {
       SceneFlavor.neutral => 'Neutral',
@@ -214,22 +228,359 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
       SceneFlavor.night => 'Night',
       SceneFlavor.urban => 'Urban',
       SceneFlavor.animation => 'Animation',
-      SceneFlavor.media => 'Media',
+      SceneFlavor.socialEdit => 'Social Edit',
     };
   }
 
+  // Stores the user's explicit scene override choice, or returns to auto mode with null.
   void _setSceneOverride(SceneFlavor? flavor) {
     setState(() {
       _sceneOverride = flavor;
     });
   }
 
+  // Recommends a preset by combining sampled frame statistics with lighter scene/title hints.
+  //
+  // The scorer works like a simple weighted voting system:
+  // - each preset starts at 0
+  // - scene type adds a soft prior so auto/manual scene context can gently bias the result
+  // - sampled frame metrics add the strongest votes because they come from actual image data
+  // - title keywords only act as a fallback nudge when the filename clearly signals intent
+  // - the preset with the highest total wins
+  //
+  // Score slots map to presets in this order:
+  // 0 = Balanced
+  // 1 = Cinematic
+  // 2 = Vivid
+  // 3 = Low-Light Rescue
+  Future<({
+    int presetIndex,
+    int confidence,
+    String summary,
+    List<String> signals,
+  })> _analyzeClipRecommendation(DemoClip clip) async {
+    final scene = _currentSceneFlavor;
+    final title = clip.title.toLowerCase();
+    final frameStats = await _analyzeVideoFrames(clip);
+
+    // One running score per preset. Higher means the clip characteristics match that look better.
+    final scores = [0, 0, 0, 0];
+
+    // Scene type acts as a low-strength prior rather than a hard rule.
+    // This helps the analyzer start in the right neighborhood without forcing a preset.
+    //
+    // Examples:
+    // - portrait clips slightly prefer Balanced because it is the safest natural look
+    // - night clips lean toward Low-Light Rescue and Cinematic
+    // - animation/social edits lean toward Vivid because those clips usually tolerate stronger stylizing
+    switch (scene) {
+      case SceneFlavor.portrait:
+        scores[0] += 2;
+        scores[1] += 1;
+      case SceneFlavor.water:
+      case SceneFlavor.nature:
+        scores[2] += 2;
+        scores[0] += 1;
+      case SceneFlavor.night:
+        scores[3] += 2;
+        scores[1] += 2;
+      case SceneFlavor.urban:
+        scores[1] += 2;
+        scores[2] += 1;
+      case SceneFlavor.animation:
+      case SceneFlavor.socialEdit:
+        scores[2] += 2;
+        scores[1] += 1;
+        scores[0] += 1;
+      case SceneFlavor.neutral:
+        scores[0] += 1;
+    }
+
+    if (frameStats != null) {
+      // Frame stats are the most important part of the recommendation.
+      // They come from five sampled frames and describe how the video actually looks on average.
+      //
+      // The thresholds below are tuned to create clear preset personalities:
+      // - dark / shadow-heavy footage strongly favors Low-Light Rescue
+      // - colorful footage strongly favors Vivid
+      // - high-contrast or warm footage leans Cinematic
+      // - flatter, restrained footage tends to favor Balanced
+      if (frameStats.darkRatio >= 0.34 || frameStats.brightness <= 0.40) {
+        // A large dark-pixel share usually means underexposed or shadow-heavy footage.
+        // Low-Light Rescue is designed to lift and protect that kind of material.
+        scores[3] += 4;
+      }
+      if (frameStats.highlightRatio >= 0.18) {
+        // Lots of bright pixels can mean highlight pressure.
+        // Balanced gets a boost for safer cleanup, while Low-Light Rescue gets a smaller
+        // boost because its protective tone shaping can also help preserve bright areas.
+        scores[0] += 2;
+        scores[3] += 1;
+      }
+      if (frameStats.saturation >= 0.36) {
+        // Already-colorful footage usually benefits from Vivid's punchier identity.
+        scores[2] += 4;
+      } else if (frameStats.saturation <= 0.20) {
+        // Muted footage is often better served by a controlled corrective look first.
+        scores[0] += 2;
+      }
+      if (frameStats.contrast >= 0.24) {
+        // Strong contrast aligns well with Cinematic, with a small spillover toward Vivid.
+        scores[1] += 3;
+        scores[2] += 1;
+      } else if (frameStats.contrast <= 0.16) {
+        // Lower-contrast footage can read as flatter or softer, which tends to fit either
+        // a neutral cleanup pass or a shadow-recovery pass.
+        scores[0] += 2;
+        scores[3] += 1;
+      }
+      if (frameStats.warmth >= 0.05) {
+        // Warmer footage is a natural fit for Cinematic's highlight shaping and overall tone.
+        scores[1] += 2;
+        scores[0] += 1;
+      } else if (frameStats.warmth <= -0.04) {
+        // Cooler footage often pairs better with Vivid's fresher color energy, with a small
+        // allowance for Low-Light Rescue when cool tones come from darker environments.
+        scores[2] += 2;
+        scores[3] += 1;
+      }
+    }
+
+    // Filename cues are intentionally weak. They should help when obvious, but never dominate
+    // actual frame analysis from the imported video.
+    if (title.contains('edit') ||
+        title.contains('tiktok') ||
+        title.contains('reel') ||
+        title.contains('anime') ||
+        title.contains('music')) {
+      scores[2] += 2;
+    }
+
+    if (title.contains('night') ||
+        title.contains('dark') ||
+        title.contains('low')) {
+      scores[3] += 2;
+    }
+
+    if (title.contains('cinema') ||
+        title.contains('film') ||
+        title.contains('drive') ||
+        title.contains('city')) {
+      scores[1] += 2;
+    }
+
+    if (title.contains('portrait') || title.contains('face')) {
+      scores[0] += 2;
+    }
+
+    // Pick the preset with the highest accumulated score.
+    var presetIndex = 0;
+    for (var i = 1; i < scores.length; i++) {
+      if (scores[i] > scores[presetIndex]) {
+        presetIndex = i;
+      }
+    }
+
+    // Confidence is based on separation between the best and second-best scores.
+    // A narrow margin means the clip could plausibly fit more than one look, while
+    // a wide margin means one preset clearly stood out from the others.
+    final sorted = [...scores]..sort();
+    final margin = sorted.last - sorted[sorted.length - 2];
+    final confidenceFloor = frameStats == null ? 66 : 76;
+    final confidenceCeiling = frameStats == null ? 90 : 97;
+    final confidence =
+        (confidenceFloor + (margin * 5)).clamp(confidenceFloor, confidenceCeiling);
+
+    // The user-facing summary explains the winning preset in plain language.
+    final summary = switch (presetIndex) {
+      0 => 'Balanced is recommended because the sampled frames look relatively controlled and natural, so a clean corrective pass should preserve detail best.',
+      1 => 'Cinematic is recommended because the sampled frames show stronger contrast or warmth, which suits a more dramatic, filmic treatment.',
+      2 => 'Vivid is recommended because the sampled frames already carry color energy, so extra pop and crispness should read well.',
+      _ => 'Low-Light Rescue is recommended because the sampled frames skew darker or shadow-heavier, so a more protective lift should hold detail better.',
+    };
+
+    final strongestSignal = switch (scene) {
+      SceneFlavor.neutral => 'Auto scene detection is inconclusive',
+      _ => 'Detected scene: ${_sceneFlavorLabel(scene)}',
+    };
+
+    // These insight pills expose the strongest signals that led to the recommendation.
+    final signals = frameStats == null
+        ? <String>[
+            strongestSignal,
+            'Frame sampling unavailable, using clip metadata fallback',
+            'Recommended look: ${_presets[presetIndex].title}',
+          ]
+        : <String>[
+            strongestSignal,
+            '5 frames sampled: B${(frameStats.brightness * 100).round()} C${(frameStats.contrast * 100).round()} S${(frameStats.saturation * 100).round()}',
+            'Shadow load ${(frameStats.darkRatio * 100).round()}% • Highlights ${(frameStats.highlightRatio * 100).round()}%',
+            'Recommended look: ${_presets[presetIndex].title}',
+          ];
+
+    return (
+      presetIndex: presetIndex,
+      confidence: confidence,
+      summary: summary,
+      signals: signals,
+    );
+  }
+
+  // Samples multiple points in the video and averages their image statistics into one profile.
+  Future<_FrameAnalysisStats?> _analyzeVideoFrames(DemoClip clip) async {
+    final filePath = clip.filePath;
+    if (filePath == null || filePath.isEmpty) {
+      return null;
+    }
+
+    final durationMs = _selectedClip?.filePath == filePath &&
+            _videoController?.value.isInitialized == true
+        ? _videoController!.value.duration.inMilliseconds
+        : 0;
+    final sampleTimes = _buildAnalysisSampleTimes(
+      durationMs > 0 ? durationMs : 6000,
+      seed: filePath.hashCode ^ clip.title.hashCode,
+    );
+
+    final samples = <_FrameAnalysisStats>[];
+    for (final timeMs in sampleTimes) {
+      final thumbnailBytes = await VideoThumbnail.thumbnailData(
+        video: filePath,
+        imageFormat: ImageFormat.PNG,
+        timeMs: timeMs,
+        quality: 45,
+        maxWidth: 144,
+      );
+      if (thumbnailBytes == null) {
+        continue;
+      }
+      final stats = await _analyzeImageBytes(thumbnailBytes);
+      if (stats != null) {
+        samples.add(stats);
+      }
+    }
+
+    if (samples.isEmpty) {
+      return null;
+    }
+
+    double average(double Function(_FrameAnalysisStats sample) valueOf) {
+      final total = samples.fold<double>(
+        0,
+        (sum, sample) => sum + valueOf(sample),
+      );
+      return total / samples.length;
+    }
+
+    return _FrameAnalysisStats(
+      brightness: average((sample) => sample.brightness),
+      contrast: average((sample) => sample.contrast),
+      saturation: average((sample) => sample.saturation),
+      warmth: average((sample) => sample.warmth),
+      darkRatio: average((sample) => sample.darkRatio),
+      highlightRatio: average((sample) => sample.highlightRatio),
+    );
+  }
+
+  // Picks five spread-out pseudo-random timestamps so analysis is less biased to one moment.
+  List<int> _buildAnalysisSampleTimes(int durationMs, {required int seed}) {
+    final safeDurationMs = math.max(durationMs, 1500);
+    final startMs = (safeDurationMs * 0.08).round();
+    final endMs = (safeDurationMs * 0.92).round();
+    final rangeMs = math.max(endMs - startMs, 1);
+    final random = math.Random(seed);
+
+    return List.generate(5, (index) {
+      final bucketStart = startMs + ((rangeMs * index) ~/ 5);
+      final bucketEnd = startMs + ((rangeMs * (index + 1)) ~/ 5);
+      final bucketWidth = math.max(bucketEnd - bucketStart, 1);
+      return bucketStart + random.nextInt(bucketWidth);
+    });
+  }
+
+  // Reads raw RGBA pixels from a generated frame and derives simple tone/color metrics.
+  Future<_FrameAnalysisStats?> _analyzeImageBytes(Uint8List bytes) async {
+    final codec = await ui.instantiateImageCodec(bytes);
+    final frame = await codec.getNextFrame();
+    final image = frame.image;
+    try {
+      final byteData = await image.toByteData(format: ui.ImageByteFormat.rawRgba);
+      if (byteData == null) {
+        return null;
+      }
+
+      final pixels = byteData.buffer.asUint8List();
+      var pixelCount = 0;
+      var luminanceSum = 0.0;
+      var luminanceSquaredSum = 0.0;
+      var saturationSum = 0.0;
+      var warmthSum = 0.0;
+      var darkPixels = 0;
+      var highlightPixels = 0;
+
+      for (var i = 0; i <= pixels.length - 4; i += 16) {
+        final red = pixels[i] / 255;
+        final green = pixels[i + 1] / 255;
+        final blue = pixels[i + 2] / 255;
+        final alpha = pixels[i + 3] / 255;
+
+        if (alpha < 0.1) {
+          continue;
+        }
+
+        final maxChannel = math.max(red, math.max(green, blue));
+        final minChannel = math.min(red, math.min(green, blue));
+        final luminance = (0.2126 * red) + (0.7152 * green) + (0.0722 * blue);
+        final saturation = maxChannel == 0
+            ? 0.0
+            : (maxChannel - minChannel) / maxChannel;
+        final warmth = ((red - blue) + ((red - green) * 0.35)).clamp(-1.0, 1.0);
+
+        pixelCount++;
+        luminanceSum += luminance;
+        luminanceSquaredSum += luminance * luminance;
+        saturationSum += saturation;
+        warmthSum += warmth;
+        if (luminance <= 0.18) {
+          darkPixels++;
+        }
+        if (luminance >= 0.82) {
+          highlightPixels++;
+        }
+      }
+
+      if (pixelCount == 0) {
+        return null;
+      }
+
+      final brightness = luminanceSum / pixelCount;
+      final variance = math.max(
+        (luminanceSquaredSum / pixelCount) - (brightness * brightness),
+        0.0,
+      );
+
+      return _FrameAnalysisStats(
+        brightness: brightness,
+        contrast: math.sqrt(variance),
+        saturation: saturationSum / pixelCount,
+        warmth: warmthSum / pixelCount,
+        darkRatio: darkPixels / pixelCount,
+        highlightRatio: highlightPixels / pixelCount,
+      );
+    } finally {
+      image.dispose();
+      codec.dispose();
+    }
+  }
+
+  // Clears the active preset without disturbing the current manual slider values.
   void _clearPreset() {
     setState(() {
       _selectedPresetIndex = -1;
     });
   }
 
+  // Applies a preset by updating both visible sliders and hidden preset-strength defaults.
   void _applyPreset(int presetIndex) {
     final settings = switch (presetIndex) {
       0 => (brightness: 51.0, contrast: 61.0, saturation: 52.0, warmth: 50.0),
@@ -263,6 +614,7 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
     });
   }
 
+  // Runs the analysis flow, updates the analysis card, and applies the recommended preset.
   Future<void> _runAiAnalysis() async {
     final selectedClip = _selectedClip;
     if (_isAnalyzing || selectedClip == null) return;
@@ -275,30 +627,29 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
 
     if (!mounted) return;
 
-    final presetIndex = switch (_sceneFlavorForClip(selectedClip)) {
-      SceneFlavor.portrait => 0,
-      SceneFlavor.water || SceneFlavor.nature => 2,
-      SceneFlavor.night => 3,
-      SceneFlavor.urban => 1,
-      SceneFlavor.animation => 2,
-      SceneFlavor.media => 2,
-      SceneFlavor.neutral => 0,
-    };
+    final analysis = await _analyzeClipRecommendation(selectedClip);
+
+    if (!mounted) return;
 
     setState(() {
       _isAnalyzing = false;
+      _analysisRecommendedPresetIndex = analysis.presetIndex;
+      _analysisConfidence = analysis.confidence;
+      _analysisSummary = analysis.summary;
+      _analysisSignals = analysis.signals;
     });
-    _applyPreset(presetIndex);
+    _applyPreset(analysis.presetIndex);
 
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(
-          'AI Scene Analysis recommended "${_presets[presetIndex].title}" for ${selectedClip.title}.',
+          'AI Scene Analysis recommended "${_presets[analysis.presetIndex].title}" for ${selectedClip.title}.',
         ),
       ),
     );
   }
 
+  // Imports device videos into the queue, then prepares thumbnails and preview playback.
   Future<void> _importVideo() async {
     final result = await FilePicker.platform.pickFiles(
       type: FileType.video,
@@ -332,6 +683,7 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
     );
   }
 
+  // Temporary export action until a real render pipeline is wired in.
   void _showExportMessage() {
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
@@ -342,6 +694,7 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
     );
   }
 
+  // Smoothly scrolls back to the main preview from the mini-player shortcut.
   Future<void> _jumpToPreview() async {
     final previewContext = _previewSectionKey.currentContext;
     if (previewContext == null) {
@@ -356,6 +709,7 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
     );
   }
 
+  // Tracks when the main preview is mostly off-screen so the mini preview can appear.
   void _handleScroll() {
     final previewContext = _previewSectionKey.currentContext;
     if (previewContext == null) {
@@ -1709,7 +2063,7 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
             ),
           ),
         ),
-      SceneFlavor.media => Align(
+      SceneFlavor.socialEdit => Align(
           alignment: const Alignment(0.18, -0.02),
           child: Container(
             width: 340,
@@ -1732,6 +2086,7 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
     };
   }
 
+  // Builds the combined color matrix for the After view from manual controls and preset effects.
   List<double> _buildAdjustmentMatrix() {
     final brightnessOffset = (_brightness - 50) * 2.2;
     final contrastValue = 0.7 + (_contrast / 100) * 0.9;
@@ -1824,6 +2179,7 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
     );
   }
 
+  // Defines per-preset tonal shaping so each preset has a different contrast/black response.
   ({
     double contrast,
     double blackLift,
@@ -1864,6 +2220,7 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
     };
   }
 
+  // Adds small scene-specific nudges so auto/manual scene selection influences the final grade.
   ({double tintShift, double brightnessLift}) _sceneToneAdjustment() {
     if (!_showAfter) {
       return (tintShift: 0.0, brightnessLift: 0.0);
@@ -1876,11 +2233,12 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
       SceneFlavor.night => (tintShift: -1.4, brightnessLift: 1.6),
       SceneFlavor.urban => (tintShift: 0.4, brightnessLift: 0.6),
       SceneFlavor.animation => (tintShift: -0.6, brightnessLift: 2.0),
-      SceneFlavor.media => (tintShift: 0.8, brightnessLift: 2.2),
+      SceneFlavor.socialEdit => (tintShift: 0.8, brightnessLift: 2.2),
       SceneFlavor.neutral => (tintShift: 0.0, brightnessLift: 0.0),
     };
   }
 
+  // Returns a simple brightness offset matrix.
   List<double> _brightnessMatrix(double offset) {
     return [
       1, 0, 0, 0, offset,
@@ -1890,6 +2248,7 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
     ];
   }
 
+  // Returns a contrast matrix with optional translation to preserve midtone positioning.
   List<double> _contrastMatrix(double value, {double translate = 0}) {
     return [
       value, 0, 0, 0, translate,
@@ -1899,6 +2258,7 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
     ];
   }
 
+  // Returns a saturation matrix based on luminance-preserving channel weights.
   List<double> _saturationMatrix(double value) {
     const lumR = 0.2126;
     const lumG = 0.7152;
@@ -1913,6 +2273,7 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
     ];
   }
 
+  // Pushes the image warmer or cooler by balancing red against blue.
   List<double> _warmthMatrix(double shift) {
     return [
       1.0, 0, 0, 0, shift,
@@ -1922,6 +2283,7 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
     ];
   }
 
+  // Shifts the image along the green-magenta axis to complement warmth.
   List<double> _tintMatrix(double shift) {
     return [
       1.0, 0, 0, 0, shift * 0.45,
@@ -1931,6 +2293,7 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
     ];
   }
 
+  // Multiplies two 4x5 color matrices so multiple looks can be applied as one filter.
   List<double> _multiplyColorMatrices(List<double> a, List<double> b) {
     final result = List<double>.filled(20, 0);
 
@@ -2005,6 +2368,7 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
     );
   }
 
+  // Converts a picked file into the app's clip model with placeholder metadata.
   DemoClip _buildImportedClip(PlatformFile file) {
     const accents = [
       Color(0xFF77B6FF),
@@ -2026,6 +2390,7 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
     );
   }
 
+  // Generates queue thumbnails lazily so imported clips can show real frame previews.
   Future<void> _generateThumbnails(List<DemoClip> clips) async {
     for (final clip in clips) {
       final filePath = clip.filePath;
@@ -2055,6 +2420,7 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
     }
   }
 
+  // Formats lightweight file metadata for the import queue subtitle.
   String _formatImportSource(PlatformFile file) {
     final extension = file.extension;
     final sizeInMb = file.size / (1024 * 1024);
@@ -2069,6 +2435,7 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
     return '${extension.toUpperCase()} • $sizeLabel';
   }
 
+  // Formats a video duration into mm:ss for queue and preview labels.
   String _formatDuration(Duration duration) {
     final totalSeconds = duration.inSeconds;
     final minutes = (totalSeconds ~/ 60).toString().padLeft(2, '0');
@@ -2076,6 +2443,7 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
     return '$minutes:$seconds';
   }
 
+  // Writes a resolved runtime duration back onto the matching imported clip.
   void _updateClipDuration(String filePath, String durationLabel) {
     final clipIndex = _clips.indexWhere((clip) => clip.filePath == filePath);
     if (clipIndex == -1 || _clips[clipIndex].duration == durationLabel) {
@@ -2085,6 +2453,7 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
     _clips[clipIndex] = _clips[clipIndex].copyWith(duration: durationLabel);
   }
 
+  // Rebuilds the preview player whenever the selected imported clip changes.
   Future<void> _syncPreviewController() async {
     final previousController = _videoController;
     _videoController = null;
@@ -2149,16 +2518,28 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
               style: TextStyle(fontSize: 24, fontWeight: FontWeight.w800),
             ),
             const SizedBox(height: 8),
-            const Text(
-              'Placeholder intelligence that recommends a look based on the selected scene.',
-              style: TextStyle(color: Colors.white60, height: 1.5),
+            Text(
+              _analysisSummary,
+              style: const TextStyle(color: Colors.white60, height: 1.5),
             ),
+            const SizedBox(height: 18),
+            const Text(
+              'Scene Type',
+              style: TextStyle(fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              'Leave this on Auto or guide the analyzer with the kind of footage you imported.',
+              style: TextStyle(color: Colors.white60, height: 1.45),
+            ),
+            const SizedBox(height: 12),
+            _buildSceneTypeScroller(),
             const SizedBox(height: 18),
             Row(
               children: [
                 Expanded(
                   child: LinearProgressIndicator(
-                    value: _isAnalyzing ? null : _qualityScore / 100,
+                    value: _isAnalyzing ? null : _analysisConfidence / 100,
                     minHeight: 10,
                     borderRadius: BorderRadius.circular(999),
                     backgroundColor: Colors.white.withValues(alpha: 0.08),
@@ -2166,7 +2547,7 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
                 ),
                 const SizedBox(width: 14),
                 Text(
-                  _isAnalyzing ? 'Analyzing...' : '$_qualityScore%',
+                  _isAnalyzing ? 'Analyzing...' : '$_analysisConfidence%',
                   style: const TextStyle(fontWeight: FontWeight.w700),
                 ),
               ],
@@ -2175,12 +2556,27 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
             Wrap(
               spacing: 10,
               runSpacing: 10,
-              children: const [
-                _InsightPill(label: 'Noise reduction', value: 'Medium'),
-                _InsightPill(label: 'Motion stability', value: 'High'),
-                _InsightPill(label: 'Face recovery', value: 'Active'),
-              ],
+              children: _analysisSignals
+                  .map(
+                    (signal) => _InsightPill(
+                      label: signal.split(':').first,
+                      value: signal.contains(':')
+                          ? signal.split(':').skip(1).join(':').trim()
+                          : signal,
+                    ),
+                  )
+                  .toList(),
             ),
+            if (_analysisRecommendedPresetIndex != null) ...[
+              const SizedBox(height: 18),
+              Text(
+                'Suggested preset: ${_presets[_analysisRecommendedPresetIndex!].title}',
+                style: const TextStyle(
+                  fontWeight: FontWeight.w700,
+                  fontSize: 16,
+                ),
+              ),
+            ],
             const SizedBox(height: 18),
             FilledButton.icon(
               onPressed: _runAiAnalysis,
@@ -2346,13 +2742,6 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
               'Adjust the video accordingly to how you prefer. Use the sliders the below to get a specific value.',
               style: TextStyle(color: Colors.white60, height: 1.5),
             ),
-            const SizedBox(height: 18),
-            Text(
-              'Scene Type',
-              style: const TextStyle(fontWeight: FontWeight.w700),
-            ),
-            const SizedBox(height: 10),
-            _buildSceneTypeScroller(),
             const SizedBox(height: 18),
             _buildSlider(
               label: 'Brightness',
@@ -2633,6 +3022,24 @@ class _InsightPill extends StatelessWidget {
       ),
     );
   }
+}
+
+class _FrameAnalysisStats {
+  const _FrameAnalysisStats({
+    required this.brightness,
+    required this.contrast,
+    required this.saturation,
+    required this.warmth,
+    required this.darkRatio,
+    required this.highlightRatio,
+  });
+
+  final double brightness;
+  final double contrast;
+  final double saturation;
+  final double warmth;
+  final double darkRatio;
+  final double highlightRatio;
 }
 
 class DemoClip {
