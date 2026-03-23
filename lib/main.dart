@@ -7,7 +7,9 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:video_player/video_player.dart';
 import 'package:video_thumbnail/video_thumbnail.dart';
+import 'widgets/video_preview_card.dart';
 
+// TODO: Refactor main.dart and split models/UI sections into different files to maintain readability
 void main() {
   runApp(const VideoEnhancerApp());
 }
@@ -112,6 +114,7 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
   bool _isPreviewLoading = false;
   final Map<String, Uint8List> _clipThumbnails = {};
   bool _showPreviewJumpButton = false;
+  bool _showPreviewControls = true;
   int? _analysisRecommendedPresetIndex;
   int _analysisConfidence = 0;
   String _analysisSummary =
@@ -979,6 +982,20 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
 
   Widget _buildPreviewCard(BuildContext context) {
     final selectedClip = _selectedClip;
+    return VideoPreviewCard(
+      cardKey: _previewSectionKey,
+      subtitle: selectedClip == null
+          ? 'Import a video to start previewing'
+          : '${selectedClip.location} • ${selectedClip.duration}',
+      showAfter: _showAfter,
+      onToggleBeforeAfter: (showAfter) {
+        setState(() {
+          _showAfter = showAfter;
+        });
+      },
+      viewport: _buildPreviewViewport(),
+    );
+    // ignore: dead_code
     return Card(
       key: _previewSectionKey,
       child: Padding(
@@ -1035,6 +1052,7 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
     final selectedClip = _selectedClip;
     final controller = _videoController;
     final hasVideo = controller != null && controller.value.isInitialized;
+    final showPlaybackControls = !hasVideo || _showPreviewControls;
     final hasSelectedClip = selectedClip != null;
     final showBalancedOverlay = _showAfter && _selectedPresetIndex == 0;
     final showCinematicOverlay = _showAfter && _selectedPresetIndex == 1;
@@ -1124,6 +1142,17 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
                 IgnorePointer(
                   child: _buildSceneAwareOverlay(),
                 ),
+              if (hasVideo)
+                Positioned.fill(
+                  child: GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onTap: () {
+                      setState(() {
+                        _showPreviewControls = !_showPreviewControls;
+                      });
+                    },
+                  ),
+                ),
               if (_isPreviewLoading)
                 Container(
                   color: Colors.black.withValues(alpha: 0.32),
@@ -1135,86 +1164,85 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
                 Positioned(
                   top: 18,
                   left: 18,
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 12,
-                      vertical: 8,
-                    ),
-                    decoration: BoxDecoration(
-                      color: Colors.black.withValues(alpha: 0.26),
-                      borderRadius: BorderRadius.circular(999),
-                    ),
-                    child: Text(
-                      hasVideo
-                          ? (_showAfter ? 'Imported Preview' : 'Original File')
-                          : (_showAfter ? 'Enhanced Preview' : 'Original Preview'),
-                      style: const TextStyle(fontWeight: FontWeight.w600),
+                  child: IgnorePointer(
+                    ignoring: !showPlaybackControls,
+                    child: AnimatedOpacity(
+                      duration: const Duration(milliseconds: 220),
+                      opacity: showPlaybackControls ? 1 : 0,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 8,
+                        ),
+                        decoration: BoxDecoration(
+                          color: Colors.black.withValues(alpha: 0.26),
+                          borderRadius: BorderRadius.circular(999),
+                        ),
+                        child: Text(
+                          hasVideo
+                              ? (_showAfter ? 'Imported Preview' : 'Original File')
+                              : (_showAfter
+                                  ? 'Enhanced Preview'
+                                  : 'Original Preview'),
+                          style: const TextStyle(fontWeight: FontWeight.w600),
+                        ),
+                      ),
                     ),
                   ),
                 ),
               if (hasSelectedClip)
                 Center(
-                  child: GestureDetector(
-                    onTap: hasVideo
-                        ? () {
-                            setState(() {
-                              if (controller.value.isPlaying) {
-                                controller.pause();
-                              } else {
-                                controller.play();
+                  child: IgnorePointer(
+                    ignoring: !showPlaybackControls,
+                    child: AnimatedOpacity(
+                      duration: const Duration(milliseconds: 220),
+                      opacity: showPlaybackControls ? 1 : 0,
+                      child: GestureDetector(
+                        onTap: hasVideo
+                            ? () {
+                                setState(() {
+                                  if (controller.value.isPlaying) {
+                                    controller.pause();
+                                    _showPreviewControls = true;
+                                  } else {
+                                    controller.play();
+                                    _showPreviewControls = false;
+                                  }
+                                });
                               }
-                            });
-                          }
-                        : null,
-                    child: Container(
-                      width: 78,
-                      height: 78,
-                      decoration: BoxDecoration(
-                        color: Colors.white.withValues(alpha: 0.12),
-                        shape: BoxShape.circle,
-                        border: Border.all(
-                          color: Colors.white.withValues(alpha: 0.18),
+                            : null,
+                        child: Container(
+                          width: 78,
+                          height: 78,
+                          decoration: BoxDecoration(
+                            color: Colors.white.withValues(alpha: 0.12),
+                            shape: BoxShape.circle,
+                            border: Border.all(
+                              color: Colors.white.withValues(alpha: 0.18),
+                            ),
+                          ),
+                          child: Icon(
+                            hasVideo && controller.value.isPlaying
+                                ? Icons.pause_rounded
+                                : Icons.play_arrow_rounded,
+                            size: 42,
+                          ),
                         ),
-                      ),
-                      child: Icon(
-                        hasVideo && controller.value.isPlaying
-                            ? Icons.pause_rounded
-                            : Icons.play_arrow_rounded,
-                        size: 42,
                       ),
                     ),
                   ),
                 ),
-              if (hasSelectedClip)
+              if (hasVideo)
                 Positioned(
+                  left: 18,
                   right: 18,
                   bottom: 18,
-                  child: Container(
-                    padding: const EdgeInsets.all(14),
-                    decoration: BoxDecoration(
-                      color: Colors.black.withValues(alpha: 0.24),
-                      borderRadius: BorderRadius.circular(18),
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          hasVideo ? 'Imported file' : 'Preview gain',
-                          style: const TextStyle(color: Colors.white70),
-                        ),
-                        const SizedBox(height: 8),
-                        Text(
-                          hasVideo
-                              ? (selectedClip.duration == '--:--'
-                                  ? 'Ready'
-                                  : selectedClip.duration)
-                              : '+${(_qualityScore / 5).round()}%',
-                          style: const TextStyle(
-                            fontSize: 24,
-                            fontWeight: FontWeight.w800,
-                          ),
-                        ),
-                      ],
+                  child: IgnorePointer(
+                    ignoring: !showPlaybackControls,
+                    child: AnimatedOpacity(
+                      duration: const Duration(milliseconds: 220),
+                      opacity: showPlaybackControls ? 1 : 0,
+                      child: PlaybackTimelineOverlay(controller: controller),
                     ),
                   ),
                 ),
@@ -1323,6 +1351,66 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
           ],
         ),
       ),
+    );
+  }
+
+  Widget _buildPlaybackTimeline(VideoPlayerController controller) {
+    return ValueListenableBuilder<VideoPlayerValue>(
+      valueListenable: controller,
+      builder: (context, value, child) {
+        final totalMs = math.max(value.duration.inMilliseconds, 1);
+        final currentMs = value.position.inMilliseconds.clamp(0, totalMs);
+
+        return Container(
+          padding: const EdgeInsets.fromLTRB(12, 10, 12, 8),
+          decoration: BoxDecoration(
+            color: Colors.black.withValues(alpha: 0.34),
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+          ),
+          child: Column(
+            children: [
+              SliderTheme(
+                data: SliderTheme.of(context).copyWith(
+                  trackHeight: 4,
+                  thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6),
+                  overlayShape: const RoundSliderOverlayShape(overlayRadius: 14),
+                  activeTrackColor: Colors.white,
+                  inactiveTrackColor: Colors.white.withValues(alpha: 0.24),
+                  thumbColor: Colors.white,
+                ),
+                child: Slider(
+                  value: currentMs.toDouble(),
+                  min: 0,
+                  max: totalMs.toDouble(),
+                  onChanged: (nextValue) {
+                    controller.seekTo(Duration(milliseconds: nextValue.round()));
+                  },
+                ),
+              ),
+              Row(
+                children: [
+                  Text(
+                    _formatDuration(Duration(milliseconds: currentMs)),
+                    style: const TextStyle(
+                      color: Colors.white70,
+                      fontFeatures: [ui.FontFeature.tabularFigures()],
+                    ),
+                  ),
+                  const Spacer(),
+                  Text(
+                    _formatDuration(value.duration),
+                    style: const TextStyle(
+                      color: Colors.white70,
+                      fontFeatures: [ui.FontFeature.tabularFigures()],
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        );
+      },
     );
   }
 
@@ -1439,17 +1527,20 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
     final selectedClip = _selectedClip;
     final controller = _videoController;
     final hasVideo = controller != null && controller.value.isInitialized;
+    const shellRadius = Radius.circular(22);
 
     return Material(
       color: Colors.transparent,
+      clipBehavior: Clip.antiAlias,
+      borderRadius: const BorderRadius.all(shellRadius),
       child: InkWell(
         onTap: _jumpToPreview,
-        borderRadius: BorderRadius.circular(22),
+        borderRadius: const BorderRadius.all(shellRadius),
         child: Ink(
           width: 184,
           decoration: BoxDecoration(
             color: const Color(0xFF101A2B).withValues(alpha: 0.96),
-            borderRadius: BorderRadius.circular(22),
+            borderRadius: const BorderRadius.all(shellRadius),
             border: Border.all(color: const Color(0xFF2A3C5E)),
             boxShadow: const [
               BoxShadow(
@@ -2495,6 +2586,7 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
       setState(() {
         _videoController = controller;
         _isPreviewLoading = false;
+        _showPreviewControls = true;
       });
     } catch (_) {
       await controller.dispose();
