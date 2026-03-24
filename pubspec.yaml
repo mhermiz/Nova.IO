@@ -37,6 +37,7 @@ dependencies:
   file_picker: ^8.1.2
   video_player: ^2.9.2
   video_thumbnail: ^0.5.6
+  ffmpeg_kit_flutter_new: ^4.1.0
 
 dev_dependencies:
   flutter_test:
@@ -59,6 +60,12 @@ flutter:
   # included with your application, so that you can use the icons in
   # the material Icons class.
   uses-material-design: true
+  assets:
+    - assets/overlays/balanced_overlay_preview.png
+    - assets/overlays/cinematic_overlay_preview.png
+    - assets/overlays/low_light_overlay_preview.png
+    - assets/patterns/white_star_pattern.png
+    - assets/overlays/vivid_overlay_preview.png
 
   # To add assets to your application, add an assets section, like this:
   # assets:

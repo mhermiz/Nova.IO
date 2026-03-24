@@ -1,162 +1,87 @@
-class ToneCurveProfile {
-  const ToneCurveProfile({
-    required this.contrast,
-    required this.blackLift,
-    required this.shadowLift,
-    required this.midtoneLift,
-  });
-
-  final double contrast;
-  final double blackLift;
-  final double shadowLift;
-  final double midtoneLift;
-}
-
 class ColorGrading {
+  static double exportBrightnessValue(double brightness) {
+    return ((brightness - 50) / 100).clamp(-1.0, 1.0);
+  }
+
+  static double exportContrastValue(double contrast) {
+    return (0.7 + (contrast / 100) * 0.9).clamp(0.0, 2.0);
+  }
+
+  static double exportSaturationValue(double saturation) {
+    return (0.35 + (saturation / 100) * 1.3).clamp(0.0, 3.0);
+  }
+
+  static double exportWarmthValue(double warmth) {
+    return ((warmth - 50) / 50).clamp(-1.0, 1.0);
+  }
+
+  static double exportTintValue(double tint) {
+    return ((tint - 50) / 50).clamp(-1.0, 1.0);
+  }
+
+  static ({double red, double green, double blue}) warmthTintChannelScale({
+    required double warmth,
+    required double tint,
+  }) {
+    final warmthValue = exportWarmthValue(warmth);
+    final tintValue = exportTintValue(tint);
+
+    return (
+      red: (1.0 + (warmthValue * 0.12) + (tintValue * 0.04)).clamp(0.75, 1.25),
+      green: (1.0 - (tintValue * 0.08)).clamp(0.75, 1.25),
+      blue: (1.0 - (warmthValue * 0.12) + (tintValue * 0.04)).clamp(0.75, 1.25),
+    );
+  }
+
+  // Builds the preview matrix from the same core values export uses so the
+  // manual grading path stays aligned across preview and FFmpeg.
   static List<double> buildAdjustmentMatrix({
     required double brightness,
     required double contrast,
     required double saturation,
     required double warmth,
     required double tint,
-    required double highlights,
-    required double shadows,
     required bool showAfter,
-    required double presetStrength,
-    required int selectedPresetIndex,
-    required double sceneTintShift,
-    required double sceneBrightnessLift,
   }) {
-    final brightnessOffset = (brightness - 50) * 2.2;
-    final contrastValue = 0.7 + (contrast / 100) * 0.9;
-    final saturationValue = 0.35 + (saturation / 100) * 1.3;
-    final warmthShift = (warmth - 50) / 100 * 28;
-    final tintShift = (tint - 50) / 100 * 20;
-    final highlightsOffset = (50 - highlights) * 0.8;
-    final shadowsOffset = (shadows - 50) * 0.7;
-    final effectivePresetStrength = showAfter ? presetStrength : 0.0;
-    final curve = presetToneCurve(
-      strength: effectivePresetStrength,
-      selectedPresetIndex: selectedPresetIndex,
-      showAfter: showAfter,
+    if (!showAfter) {
+      return const [
+        1, 0, 0, 0, 0,
+        0, 1, 0, 0, 0,
+        0, 0, 1, 0, 0,
+        0, 0, 0, 1, 0,
+      ];
+    }
+
+    final brightnessOffset = exportBrightnessValue(brightness) * 255;
+    final contrastValue = exportContrastValue(contrast);
+    final saturationValue = exportSaturationValue(saturation);
+    final warmthTint = warmthTintChannelScale(
+      warmth: warmth,
+      tint: tint,
     );
-    final clarityBoost = switch (selectedPresetIndex) {
-      0 when showAfter => 1.0 + (0.05 * effectivePresetStrength),
-      2 when showAfter => 1.0 + (0.08 * effectivePresetStrength),
-      _ => 1.0,
-    };
-    final cinematicFade =
-        showAfter && selectedPresetIndex == 1 ? 10.0 * effectivePresetStrength : 0.0;
-    final lowLightLift =
-        showAfter && selectedPresetIndex == 3 ? 8.0 * effectivePresetStrength : 0.0;
 
     final contrastMatrix = createContrastMatrix(
       contrastValue,
       translate: 128 * (1 - contrastValue),
     );
     final saturationMatrix = createSaturationMatrix(saturationValue);
-    final warmthMatrix = createWarmthMatrix(warmthShift);
-    final tintMatrix = createTintMatrix(tintShift);
     final brightnessMatrix = createBrightnessMatrix(brightnessOffset);
-    final clarityMatrix = createContrastMatrix(
-      clarityBoost,
-      translate: 128 * (1 - clarityBoost),
-    );
-    final fadeMatrix = createBrightnessMatrix(cinematicFade);
-    final lowLightLiftMatrix = createBrightnessMatrix(lowLightLift);
-    final highlightsMatrix = createBrightnessMatrix(highlightsOffset);
-    final shadowsMatrix = createBrightnessMatrix(shadowsOffset);
-    final sceneTintMatrix = createTintMatrix(sceneTintShift);
-    final sceneBrightnessMatrix = createBrightnessMatrix(sceneBrightnessLift);
-    final curveShadowLiftMatrix = createBrightnessMatrix(curve.shadowLift);
-    final curveMidtoneMatrix = createBrightnessMatrix(curve.midtoneLift);
-    final curveContrastMatrix = createContrastMatrix(
-      curve.contrast,
-      translate: 128 * (1 - curve.contrast) + curve.blackLift,
+    final warmthTintMatrix = createChannelScaleMatrix(
+      red: warmthTint.red,
+      green: warmthTint.green,
+      blue: warmthTint.blue,
     );
 
     return multiplyColorMatrices(
-      sceneBrightnessMatrix,
+      brightnessMatrix,
       multiplyColorMatrices(
-        sceneTintMatrix,
+        warmthTintMatrix,
         multiplyColorMatrices(
-          curveShadowLiftMatrix,
-          multiplyColorMatrices(
-            curveMidtoneMatrix,
-            multiplyColorMatrices(
-              curveContrastMatrix,
-              multiplyColorMatrices(
-                highlightsMatrix,
-                multiplyColorMatrices(
-                  shadowsMatrix,
-                  multiplyColorMatrices(
-                    lowLightLiftMatrix,
-                    multiplyColorMatrices(
-                      fadeMatrix,
-                      multiplyColorMatrices(
-                        clarityMatrix,
-                        multiplyColorMatrices(
-                          brightnessMatrix,
-                          multiplyColorMatrices(
-                            tintMatrix,
-                            multiplyColorMatrices(
-                              warmthMatrix,
-                              multiplyColorMatrices(
-                                saturationMatrix,
-                                contrastMatrix,
-                              ),
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          ),
+          saturationMatrix,
+          contrastMatrix,
         ),
       ),
     );
-  }
-
-  static ToneCurveProfile presetToneCurve({
-    required double strength,
-    required int selectedPresetIndex,
-    required bool showAfter,
-  }) {
-    return switch (selectedPresetIndex) {
-      0 when showAfter => ToneCurveProfile(
-          contrast: 1.0 + (0.04 * strength),
-          blackLift: 2.0 * strength,
-          shadowLift: 1.6 * strength,
-          midtoneLift: 0.8 * strength,
-        ),
-      1 when showAfter => ToneCurveProfile(
-          contrast: 1.0 + (0.08 * strength),
-          blackLift: 7.5 * strength,
-          shadowLift: 0.8 * strength,
-          midtoneLift: -1.2 * strength,
-        ),
-      2 when showAfter => ToneCurveProfile(
-          contrast: 1.0 + (0.09 * strength),
-          blackLift: 0.5 * strength,
-          shadowLift: -0.6 * strength,
-          midtoneLift: 2.6 * strength,
-        ),
-      3 when showAfter => ToneCurveProfile(
-          contrast: 1.0 + (0.02 * strength),
-          blackLift: 5.0 * strength,
-          shadowLift: 4.6 * strength,
-          midtoneLift: 1.4 * strength,
-        ),
-      _ => const ToneCurveProfile(
-          contrast: 1.0,
-          blackLift: 0.0,
-          shadowLift: 0.0,
-          midtoneLift: 0.0,
-        ),
-    };
   }
 
   static List<double> createBrightnessMatrix(double offset) {
@@ -191,20 +116,15 @@ class ColorGrading {
     ];
   }
 
-  static List<double> createWarmthMatrix(double shift) {
+  static List<double> createChannelScaleMatrix({
+    required double red,
+    required double green,
+    required double blue,
+  }) {
     return [
-      1.0, 0, 0, 0, shift,
-      0, 1.0, 0, 0, 0,
-      0, 0, 1.0, 0, -shift,
-      0, 0, 0, 1, 0,
-    ];
-  }
-
-  static List<double> createTintMatrix(double shift) {
-    return [
-      1.0, 0, 0, 0, shift * 0.45,
-      0, 1.0, 0, 0, -shift,
-      0, 0, 1.0, 0, shift * 0.45,
+      red, 0, 0, 0, 0,
+      0, green, 0, 0, 0,
+      0, 0, blue, 0, 0,
       0, 0, 0, 1, 0,
     ];
   }

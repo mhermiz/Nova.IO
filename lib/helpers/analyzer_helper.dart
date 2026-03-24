@@ -144,14 +144,14 @@ class AnalyzerHelper {
         scores[2] += 2;
         scores[0] += 1;
       case SceneFlavor.night:
-        scores[3] += 2;
+        scores[3] += 4;
         scores[1] += 2;
       case SceneFlavor.urban:
         scores[1] += 2;
         scores[2] += 1;
       case SceneFlavor.animation:
       case SceneFlavor.socialEdit:
-        scores[2] += 2;
+        scores[2] += 3;
         scores[1] += 1;
         scores[0] += 1;
       case SceneFlavor.neutral:
@@ -160,7 +160,7 @@ class AnalyzerHelper {
 
     if (frameStats != null) {
       if (frameStats.darkRatio >= 0.34 || frameStats.brightness <= 0.40) {
-        scores[3] += 4;
+        scores[3] += 2;
       }
       if (frameStats.highlightRatio >= 0.18) {
         scores[0] += 2;
@@ -251,7 +251,7 @@ class AnalyzerHelper {
         : <String>[
             strongestSignal,
             '5 frames sampled: B${(frameStats.brightness * 100).round()} C${(frameStats.contrast * 100).round()} S${(frameStats.saturation * 100).round()}',
-            'Shadow load ${(frameStats.darkRatio * 100).round()}% • Highlights ${(frameStats.highlightRatio * 100).round()}%',
+            'Dark pixels ${(frameStats.darkRatio * 100).round()}% • Bright pixels ${(frameStats.highlightRatio * 100).round()}%',
             'Recommended look: ${presetTitles[presetIndex]}',
           ];
 

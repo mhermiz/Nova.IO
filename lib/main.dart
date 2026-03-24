@@ -1,10 +1,11 @@
 import 'dart:io';
-import 'dart:typed_data';
-
 import 'package:file_picker/file_picker.dart';
+import 'package:ffmpeg_kit_flutter_new/ffmpeg_kit.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:video_player/video_player.dart';
 import 'package:video_thumbnail/video_thumbnail.dart';
+import 'package:ffmpeg_kit_flutter_new/return_code.dart';
 import 'helpers/analyzer_helper.dart';
 import 'helpers/color_grading.dart';
 import 'models/demo_clip.dart';
@@ -13,13 +14,33 @@ import 'widgets/adjustments_card.dart';
 import 'widgets/analysis_card.dart';
 import 'widgets/preview_media.dart';
 import 'widgets/presets_card.dart';
-import 'widgets/video_effect_overlays.dart';
 import 'widgets/frame_painter.dart';
 import 'widgets/video_preview_card.dart';
 
-// TODO: Refactor main.dart and split models/UI sections into different files to maintain readability
 void main() {
   runApp(const VideoEnhancerApp());
+}
+
+enum ExportDestination {
+  originalFolder,
+  customFolder,
+}
+
+enum ExportFormat {
+  mp4,
+  mov,
+}
+
+enum ExportResolution {
+  source,
+  p1080,
+  p720,
+}
+
+enum ExportBitrate {
+  low,
+  medium,
+  high,
 }
 
 class VideoEnhancerApp extends StatelessWidget {
@@ -63,9 +84,15 @@ class VideoEnhancerHomePage extends StatefulWidget {
 }
 
 class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
+  static const MethodChannel _mediaScannerChannel = MethodChannel(
+    'videoenhancerapp/media_scanner',
+  );
+
   final List<DemoClip> _clips = [];
   final GlobalKey _previewSectionKey = GlobalKey();
   final ScrollController _scrollController = ScrollController();
+  final TextEditingController _exportFileNameController =
+      TextEditingController();
 
   final List<EnhancementPreset> _presets = const [
     EnhancementPreset(
@@ -88,7 +115,7 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
     ),
     EnhancementPreset(
       title: 'Low-Light Rescue',
-      subtitle: 'Lifts shadows and protects highlights',
+      subtitle: 'Brightens dim footage with cleaner tone',
       accent: Color(0xFFD7A5FF),
       icon: Icons.nightlight_round,
     ),
@@ -103,15 +130,23 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
   double _saturation = 58;
   double _warmth = 46;
   double _tint = 50;
-  double _highlights = 52;
-  double _shadows = 48;
   double _presetStrength = 0.85;
+  bool _showPresetOverlay = true;
   SceneFlavor? _sceneOverride;
   VideoPlayerController? _videoController;
   bool _isPreviewLoading = false;
   final Map<String, Uint8List> _clipThumbnails = {};
   bool _showPreviewJumpButton = false;
   bool _showPreviewControls = true;
+  bool _isExporting = false;
+  ExportDestination _exportDestination = ExportDestination.originalFolder;
+  ExportFormat _exportFormat = ExportFormat.mp4;
+  ExportResolution _exportResolution = ExportResolution.source;
+  ExportBitrate _exportBitrate = ExportBitrate.medium;
+  String? _customExportDirectory;
+  String _exportStatusMessage = 'Ready to export the selected clip.';
+  String? _lastExportPath;
+  bool _lastExportSucceeded = false;
   int? _analysisRecommendedPresetIndex;
   int _analysisConfidence = 0;
   String _analysisSummary =
@@ -143,6 +178,7 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
     super.initState();
     _scrollController.addListener(_handleScroll);
     WidgetsBinding.instance.addPostFrameCallback((_) => _handleScroll());
+    _syncExportFileName();
     _syncPreviewController();
   }
 
@@ -151,6 +187,7 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
   void dispose() {
     _scrollController.removeListener(_handleScroll);
     _scrollController.dispose();
+    _exportFileNameController.dispose();
     _videoController?.dispose();
     super.dispose();
   }
@@ -238,12 +275,6 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
       2 => 46.0,
       _ => 52.0,
     };
-    final tonal = switch (presetIndex) {
-      0 => (highlights: 48.0, shadows: 50.0),
-      1 => (highlights: 42.0, shadows: 40.0),
-      2 => (highlights: 58.0, shadows: 52.0),
-      _ => (highlights: 38.0, shadows: 72.0),
-    };
 
     setState(() {
       _selectedPresetIndex = presetIndex;
@@ -252,8 +283,6 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
       _saturation = settings.saturation;
       _warmth = settings.warmth;
       _tint = colorBalance;
-      _highlights = tonal.highlights;
-      _shadows = tonal.shadows;
       _presetStrength = 0.85;
     });
   }
@@ -310,6 +339,7 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
       _clips.addAll(importedClips);
       _selectedClipIndex = _clips.length - importedClips.length;
       _sceneOverride = null;
+      _syncExportFileName();
     });
 
     _generateThumbnails(importedClips);
@@ -327,15 +357,353 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
     );
   }
 
-  // Temporary export action until a real render pipeline is wired in.
-  void _showExportMessage() {
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text(
-          'Export Enhanced Video is a placeholder for the rendering pipeline.',
-        ),
-      ),
+  String _buildExportOutputPath(String inputPath) {
+    final inputFile = File(inputPath);
+    final parentPath = switch (_exportDestination) {
+      ExportDestination.originalFolder => inputFile.parent.path,
+      ExportDestination.customFolder when _customExportDirectory != null =>
+        _customExportDirectory!,
+      _ => inputFile.parent.path,
+    };
+    final originalName = inputFile.path.split(RegExp(r'[\\/]')).last;
+    final dotIndex = originalName.lastIndexOf('.');
+    final hasExtension = dotIndex > 0;
+    final originalBaseName = hasExtension
+        ? originalName.substring(0, dotIndex)
+        : originalName;
+    final customBaseName = _sanitizeExportFileName(
+      _exportFileNameController.text,
     );
+    final baseName = customBaseName.isEmpty ? originalBaseName : customBaseName;
+    final extension = switch (_exportFormat) {
+      ExportFormat.mp4 => '.mp4',
+      ExportFormat.mov => '.mov',
+    };
+    return '$parentPath${Platform.pathSeparator}$baseName$extension';
+  }
+
+  void _syncExportFileName() {
+    final clip = _selectedClip;
+    if (clip == null) {
+      _exportFileNameController.text = '';
+      return;
+    }
+
+    final originalName = clip.title;
+    final dotIndex = originalName.lastIndexOf('.');
+    final defaultBaseName = dotIndex > 0
+        ? originalName.substring(0, dotIndex)
+        : originalName;
+    _exportFileNameController.text = defaultBaseName;
+  }
+
+  String _sanitizeExportFileName(String value) {
+    return value
+        .trim()
+        .replaceAll(RegExp(r'[\\/:*?"<>|]'), '')
+        .replaceAll(RegExp(r'\s+'), ' ');
+  }
+
+  Future<void> _pickExportDirectory() async {
+    final directoryPath = await FilePicker.platform.getDirectoryPath(
+      dialogTitle: 'Select export folder',
+      lockParentWindow: true,
+    );
+
+    if (!mounted || directoryPath == null || directoryPath.isEmpty) {
+      return;
+    }
+
+    setState(() {
+      _customExportDirectory = directoryPath;
+      _exportDestination = ExportDestination.customFolder;
+      _exportStatusMessage = 'Export destination set to $directoryPath';
+    });
+  }
+
+  Future<void> _scanExportedMedia(String outputPath) async {
+    if (!Platform.isAndroid) {
+      return;
+    }
+
+    try {
+      await _mediaScannerChannel.invokeMethod<void>('scanFile', {
+        'path': outputPath,
+      });
+    } catch (_) {
+      // Export already succeeded; indexing is best-effort only.
+    }
+  }
+
+
+  String _exportBitrateValue() {
+    return switch (_exportBitrate) {
+      ExportBitrate.low => '6M',
+      ExportBitrate.medium => '12M',
+      ExportBitrate.high => '24M',
+    };
+  }
+
+  String _buildExportScaleFilter() {
+    return switch (_exportResolution) {
+      ExportResolution.source => '',
+      ExportResolution.p1080 =>
+        'scale=w=1920:h=1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2',
+      ExportResolution.p720 =>
+        'scale=w=1280:h=720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2',
+    };
+  }
+
+  Future<String?> _writeExportOverlayAsset(String assetPath, String fileName) async {
+    try {
+      final asset = await rootBundle.load(assetPath);
+      final outputFile =
+          File('${Directory.systemTemp.path}${Platform.pathSeparator}$fileName');
+      await outputFile.writeAsBytes(
+        asset.buffer.asUint8List(),
+        flush: true,
+      );
+      return outputFile.path;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  // Maps the manual core grading sliders into FFmpeg's eq filter values.
+  String _buildExportVideoFilter() {
+    final brightnessValue = ColorGrading.exportBrightnessValue(_brightness);
+    final contrastValue = ColorGrading.exportContrastValue(_contrast);
+    final saturationValue = ColorGrading.exportSaturationValue(_saturation);
+    final warmthTint = ColorGrading.warmthTintChannelScale(
+      warmth: _warmth,
+      tint: _tint,
+    );
+    final presetFilters = _buildExportPresetFilters();
+    final isNeutralBrightness = brightnessValue.abs() < 0.01;
+    final isNeutralContrast = (contrastValue - 1.0).abs() < 0.01;
+    final isNeutralSaturation = (saturationValue - 1.0).abs() < 0.01;
+    final isNeutralWarmthTint =
+        (warmthTint.red - 1.0).abs() < 0.001 &&
+        (warmthTint.green - 1.0).abs() < 0.001 &&
+        (warmthTint.blue - 1.0).abs() < 0.001;
+
+    if (isNeutralBrightness &&
+        isNeutralContrast &&
+        isNeutralSaturation &&
+        isNeutralWarmthTint &&
+        presetFilters.isEmpty) {
+      return '';
+    }
+
+    final filters = <String>[];
+
+    if (!isNeutralBrightness || !isNeutralContrast || !isNeutralSaturation) {
+      filters.add(
+        'eq='
+        'brightness=${brightnessValue.toStringAsFixed(3)}:'
+        'contrast=${contrastValue.toStringAsFixed(3)}:'
+        'saturation=${saturationValue.toStringAsFixed(3)}',
+      );
+    }
+
+    if (!isNeutralWarmthTint) {
+      filters.add(
+        'colorchannelmixer='
+        'rr=${warmthTint.red.toStringAsFixed(3)}:'
+        'gg=${warmthTint.green.toStringAsFixed(3)}:'
+        'bb=${warmthTint.blue.toStringAsFixed(3)}',
+      );
+    }
+
+    filters.addAll(presetFilters);
+    return filters.join(',');
+  }
+
+  String? get _activePresetOverlayAssetPath {
+    if (!_showPresetOverlay || _presetStrength <= 0.01) {
+      return null;
+    }
+
+    return switch (_selectedPresetIndex) {
+      0 => 'assets/overlays/balanced_overlay_preview.png',
+      1 => 'assets/overlays/cinematic_overlay_preview.png',
+      3 => 'assets/overlays/low_light_overlay_preview.png',
+      2 => 'assets/overlays/vivid_overlay_preview.png',
+      _ => null,
+    };
+  }
+
+  String _buildExportCommand({
+    required String inputPath,
+    required String outputPath,
+    required String videoFilter,
+    String? overlayPath,
+  }) {
+    final escapedInput = inputPath.replaceAll('"', r'\"');
+    final escapedOutput = outputPath.replaceAll('"', r'\"');
+    final scaleFilter = _buildExportScaleFilter();
+    final bitrate = _exportBitrateValue();
+    final formatFlags = switch (_exportFormat) {
+      ExportFormat.mp4 => '-movflags +faststart',
+      ExportFormat.mov => '',
+    };
+
+    if (overlayPath == null || overlayPath.isEmpty) {
+      final filters = <String>[];
+      if (videoFilter.isNotEmpty) {
+        filters.add(videoFilter);
+      }
+      if (scaleFilter.isNotEmpty) {
+        filters.add(scaleFilter);
+      }
+      final filterArgument = filters.isEmpty
+          ? ''
+          : '-vf "${filters.join(',').replaceAll('"', r'\"')}" ';
+      return '-y -i "$escapedInput" $filterArgument-c:v libx264 -preset ultrafast -threads 2 -b:v $bitrate -maxrate $bitrate -bufsize $bitrate -pix_fmt yuv420p -colorspace bt709 -color_primaries bt709 -color_trc bt709 -c:a aac $formatFlags "$escapedOutput"';
+    }
+
+    final escapedOverlay = overlayPath.replaceAll('"', r'\"');
+    final overlayAlpha = (0.35 + (_presetStrength * 0.55)).clamp(0.35, 0.90);
+    final baseFilters = <String>[];
+    if (videoFilter.isNotEmpty) {
+      baseFilters.add(videoFilter);
+    }
+    if (scaleFilter.isNotEmpty) {
+      baseFilters.add(scaleFilter);
+    }
+    final baseFilter = baseFilters.isEmpty ? 'null' : baseFilters.join(',');
+    final filterComplex =
+        '[0:v]$baseFilter[base];'
+        '[1:v][base]scale2ref=w=iw:h=ih[overlay][base2];'
+        '[overlay]format=rgba,colorchannelmixer=aa=${overlayAlpha.toStringAsFixed(3)}[overlaya];'
+        '[base2][overlaya]overlay=0:0:format=auto[vout]';
+
+    return '-y -i "$escapedInput" -loop 1 -i "$escapedOverlay" -filter_complex "${filterComplex.replaceAll('"', r'\"')}" -map "[vout]" -map 0:a? -shortest -c:v libx264 -preset ultrafast -threads 2 -b:v $bitrate -maxrate $bitrate -bufsize $bitrate -pix_fmt yuv420p -colorspace bt709 -color_primaries bt709 -color_trc bt709 -c:a aac $formatFlags "$escapedOutput"';
+  }
+
+  // Export-driven parity: preset identity comes from overlays rather than a
+  // second FFmpeg grading pass, which was causing color drift away from preview.
+  List<String> _buildExportPresetFilters() {
+    return const [];
+  }
+
+  Future<void> _exportVideo() async {
+    final messenger = ScaffoldMessenger.of(context);
+    final selectedClip = _selectedClip;
+    final inputPath = selectedClip?.filePath;
+
+    if (inputPath == null || inputPath.isEmpty) {
+      messenger.showSnackBar(
+        const SnackBar(
+          content: Text('Import and select a video before exporting.'),
+        ),
+      );
+      return;
+    }
+
+    if (_isExporting) {
+      return;
+    }
+
+    final outputPath = _buildExportOutputPath(inputPath);
+    await Directory(File(outputPath).parent.path).create(recursive: true);
+    final videoFilter = _buildExportVideoFilter();
+    String? overlayPath;
+
+    final activeOverlayAssetPath = _activePresetOverlayAssetPath;
+    if (activeOverlayAssetPath != null) {
+      overlayPath = await _writeExportOverlayAsset(
+        activeOverlayAssetPath,
+        switch (_selectedPresetIndex) {
+          0 => 'balanced_overlay_export.png',
+          1 => 'cinematic_overlay_export.png',
+          3 => 'low_light_overlay_export.png',
+          _ => 'vivid_overlay_export.png',
+        },
+      );
+    }
+
+    final command = _buildExportCommand(
+      inputPath: inputPath,
+      outputPath: outputPath,
+      videoFilter: videoFilter,
+      overlayPath: overlayPath,
+    );
+
+    setState(() {
+      _isExporting = true;
+      _lastExportSucceeded = false;
+      _exportStatusMessage = 'Exporting ${selectedClip!.title}...';
+      _lastExportPath = outputPath;
+    });
+
+    try {
+      final session = await FFmpegKit.execute(command);
+      final returnCode = await session.getReturnCode();
+
+      if (!mounted) {
+        return;
+      }
+
+      if (ReturnCode.isSuccess(returnCode)) {
+        final finalOutputPath = outputPath;
+        await _scanExportedMedia(outputPath);
+        setState(() {
+          _lastExportSucceeded = true;
+          _exportStatusMessage = 'Export complete.';
+          _lastExportPath = finalOutputPath;
+        });
+        messenger.showSnackBar(
+          SnackBar(
+            content: Text('Exported video to $finalOutputPath'),
+          ),
+        );
+      } else if (ReturnCode.isCancel(returnCode)) {
+        setState(() {
+          _lastExportSucceeded = false;
+          _exportStatusMessage = 'Export canceled.';
+        });
+        messenger.showSnackBar(
+          const SnackBar(
+            content: Text('Export was canceled.'),
+          ),
+        );
+      } else {
+        final logs = await session.getLogsAsString();
+        setState(() {
+          _lastExportSucceeded = false;
+          _exportStatusMessage = logs.isEmpty
+              ? 'Export failed.'
+              : 'Export failed. Check debug logs for FFmpeg details.';
+        });
+        messenger.showSnackBar(
+          SnackBar(
+            content: Text(
+              'Export failed.${logs.isEmpty ? '' : ' Check logs in debug console.'}',
+            ),
+          ),
+        );
+      }
+    } catch (_) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _lastExportSucceeded = false;
+        _exportStatusMessage = 'Export failed before FFmpeg could finish.';
+      });
+      messenger.showSnackBar(
+        const SnackBar(
+          content: Text('Export failed before FFmpeg could finish.'),
+        ),
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isExporting = false;
+        });
+      }
+    }
   }
 
   // Smoothly scrolls back to the main preview from the mini-player shortcut.
@@ -403,6 +771,22 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
         child: SafeArea(
           child: Stack(
             children: [
+              Positioned.fill(
+                child: IgnorePointer(
+                  child: Opacity(
+                    opacity: 0.40,
+                    child: DecoratedBox(
+                      decoration: const BoxDecoration(
+                        image: DecorationImage(
+                          image: AssetImage('assets/patterns/white_star_pattern.png'),
+                          repeat: ImageRepeat.repeat,
+                          alignment: Alignment.topLeft,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
               SingleChildScrollView(
                 controller: _scrollController,
                 padding: const EdgeInsets.all(20),
@@ -519,7 +903,7 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
                         color: Colors.white.withValues(alpha: 0.12),
                       ),
                     ),
-                    child: const Text('Realtime enhancement workspace'),
+                    child: const Text('Nova.IO Video Enhancement'),
                   ),
                   const SizedBox(height: 18),
                   Text(
@@ -644,10 +1028,6 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
     final hasVideo = controller != null && controller.value.isInitialized;
     final showPlaybackControls = !hasVideo || _showPreviewControls;
     final hasSelectedClip = selectedClip != null;
-    final showBalancedOverlay = _showAfter && _selectedPresetIndex == 0;
-    final showCinematicOverlay = _showAfter && _selectedPresetIndex == 1;
-    final showVividOverlay = _showAfter && _selectedPresetIndex == 2;
-    final showLowLightOverlay = _showAfter && _selectedPresetIndex == 3;
 
     return VideoPreviewViewport(
       aspectRatio: hasVideo ? controller.value.aspectRatio : 16 / 9,
@@ -688,26 +1068,14 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
             )
           : const EmptyPreviewMessage(),
       effectOverlays: [
-        if (showBalancedOverlay)
-          IgnorePointer(child: BalancedPresetOverlay(strength: _presetStrength)),
-        if (showCinematicOverlay)
-          IgnorePointer(child: CinematicPresetOverlay(strength: _presetStrength)),
-        if (showVividOverlay)
-          IgnorePointer(child: VividPresetOverlay(strength: _presetStrength)),
-        if (showLowLightOverlay)
-          IgnorePointer(child: LowLightPresetOverlay(strength: _presetStrength)),
-        if (_showAfter && _selectedPresetIndex >= 0)
+        if (_showAfter && _activePresetOverlayAssetPath != null)
           IgnorePointer(
-            child: SelectiveColorOverlay(
-              presetIndex: _selectedPresetIndex,
-              strength: _presetStrength,
-            ),
-          ),
-        if (_showAfter && selectedClip != null)
-          IgnorePointer(
-            child: SceneAwareOverlay(
-              sceneFlavor: _currentSceneFlavor,
-              strength: _presetStrength,
+            child: Opacity(
+              opacity: (0.35 + (_presetStrength * 0.55)).clamp(0.35, 0.90),
+              child: Image.asset(
+                _activePresetOverlayAssetPath!,
+                fit: BoxFit.cover,
+              ),
             ),
           ),
       ],
@@ -802,6 +1170,7 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
                       setState(() {
                         _selectedClipIndex = index;
                         _sceneOverride = null;
+                        _syncExportFileName();
                       });
                       _syncPreviewController();
                     },
@@ -895,39 +1264,14 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
 
   // Builds the combined color matrix for the After view from manual controls and preset effects.
   List<double> _buildAdjustmentMatrix() {
-    final sceneTone = _sceneToneAdjustment();
     return ColorGrading.buildAdjustmentMatrix(
       brightness: _brightness,
       contrast: _contrast,
       saturation: _saturation,
       warmth: _warmth,
       tint: _tint,
-      highlights: _highlights,
-      shadows: _shadows,
       showAfter: _showAfter,
-      presetStrength: _presetStrength,
-      selectedPresetIndex: _selectedPresetIndex,
-      sceneTintShift: sceneTone.tintShift,
-      sceneBrightnessLift: sceneTone.brightnessLift,
     );
-  }
-
-  // Adds small scene-specific nudges so auto/manual scene selection influences the final grade.
-  ({double tintShift, double brightnessLift}) _sceneToneAdjustment() {
-    if (!_showAfter) {
-      return (tintShift: 0.0, brightnessLift: 0.0);
-    }
-
-    return switch (_currentSceneFlavor) {
-      SceneFlavor.portrait => (tintShift: 1.2, brightnessLift: 1.2),
-      SceneFlavor.water => (tintShift: -1.6, brightnessLift: 1.4),
-      SceneFlavor.nature => (tintShift: -0.8, brightnessLift: 0.8),
-      SceneFlavor.night => (tintShift: -1.4, brightnessLift: 1.6),
-      SceneFlavor.urban => (tintShift: 0.4, brightnessLift: 0.6),
-      SceneFlavor.animation => (tintShift: -0.6, brightnessLift: 2.0),
-      SceneFlavor.socialEdit => (tintShift: 0.8, brightnessLift: 2.2),
-      SceneFlavor.neutral => (tintShift: 0.0, brightnessLift: 0.0),
-    };
   }
 
   Widget _buildClipThumbnail(DemoClip clip) {
@@ -1164,6 +1508,12 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
           _presetStrength = value / 100;
         });
       },
+      showPresetOverlay: _showPresetOverlay,
+      onTogglePresetOverlay: (value) {
+        setState(() {
+          _showPresetOverlay = value;
+        });
+      },
     );
   }
 
@@ -1195,16 +1545,6 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
           value: _tint,
           onChanged: (value) => setState(() => _tint = value),
         ),
-        AdjustmentControl(
-          label: 'Highlights',
-          value: _highlights,
-          onChanged: (value) => setState(() => _highlights = value),
-        ),
-        AdjustmentControl(
-          label: 'Shadows',
-          value: _shadows,
-          onChanged: (value) => setState(() => _shadows = value),
-        ),
       ],
     );
   }
@@ -1220,46 +1560,220 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
               'Export',
               style: TextStyle(fontSize: 24, fontWeight: FontWeight.w800),
             ),
-            const SizedBox(height: 16),
-            Container(
-              padding: const EdgeInsets.all(18),
-              decoration: BoxDecoration(
-                color: Colors.white.withValues(alpha: 0.04),
-                borderRadius: BorderRadius.circular(22),
-              ),
-              child: const Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    'Export Enhanced Video',
-                    style: TextStyle(
-                      fontSize: 18,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                  SizedBox(height: 8),
-                  Text(
-                    'Placeholder settings for codec, resolution, and delivery output.',
-                    style: TextStyle(color: Colors.white60, height: 1.5),
-                  ),
-                ],
+            const SizedBox(height: 14),
+            const Text(
+              'Settings',
+              style: TextStyle(fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 10),
+            TextField(
+              controller: _exportFileNameController,
+              decoration: InputDecoration(
+                labelText: 'File Name',
+                hintText: 'Export file name',
+                helperText: 'Extension is added automatically.',
+                filled: true,
+                fillColor: Colors.white.withValues(alpha: 0.04),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(18),
+                  borderSide: const BorderSide(color: Color(0xFF22324D)),
+                ),
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(18),
+                  borderSide: const BorderSide(color: Color(0xFF22324D)),
+                ),
+                focusedBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(18),
+                  borderSide: const BorderSide(color: Color(0xFF63B3FF)),
+                ),
               ),
             ),
-            const SizedBox(height: 16),
+            const SizedBox(height: 14),
             Row(
               children: [
-                Expanded(child: _exportInfo('Resolution', '4K UHD')),
+                Expanded(
+                  child: _buildExportDropdown<ExportResolution>(
+                    label: 'Resolution',
+                    value: _exportResolution,
+                    items: const [
+                      DropdownMenuItem(
+                        value: ExportResolution.source,
+                        child: Text('Source'),
+                      ),
+                      DropdownMenuItem(
+                        value: ExportResolution.p1080,
+                        child: Text('1080p'),
+                      ),
+                      DropdownMenuItem(
+                        value: ExportResolution.p720,
+                        child: Text('720p'),
+                      ),
+                    ],
+                    onChanged: (value) {
+                      if (value == null) return;
+                      setState(() {
+                        _exportResolution = value;
+                      });
+                    },
+                  ),
+                ),
                 const SizedBox(width: 12),
-                Expanded(child: _exportInfo('Format', 'H.264 MP4')),
+                Expanded(
+                  child: _buildExportDropdown<ExportFormat>(
+                    label: 'Format',
+                    value: _exportFormat,
+                    items: const [
+                      DropdownMenuItem(
+                        value: ExportFormat.mp4,
+                        child: Text('MP4'),
+                      ),
+                      DropdownMenuItem(
+                        value: ExportFormat.mov,
+                        child: Text('MOV'),
+                      ),
+                    ],
+                    onChanged: (value) {
+                      if (value == null) return;
+                      setState(() {
+                        _exportFormat = value;
+                      });
+                    },
+                  ),
+                ),
                 const SizedBox(width: 12),
-                Expanded(child: _exportInfo('Bitrate', '24 Mbps')),
+                Expanded(
+                  child: _buildExportDropdown<ExportBitrate>(
+                    label: 'Bitrate',
+                    value: _exportBitrate,
+                    items: const [
+                      DropdownMenuItem(
+                        value: ExportBitrate.low,
+                        child: Text('6 Mbps'),
+                      ),
+                      DropdownMenuItem(
+                        value: ExportBitrate.medium,
+                        child: Text('12 Mbps'),
+                      ),
+                      DropdownMenuItem(
+                        value: ExportBitrate.high,
+                        child: Text('24 Mbps'),
+                      ),
+                    ],
+                    onChanged: (value) {
+                      if (value == null) return;
+                      setState(() {
+                        _exportBitrate = value;
+                      });
+                    },
+                  ),
+                ),
               ],
             ),
             const SizedBox(height: 18),
+            const Text(
+              'Destination',
+              style: TextStyle(fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 10),
+            Wrap(
+              spacing: 10,
+              runSpacing: 10,
+              children: [
+                _buildExportDestinationChip(
+                  label: 'Original Folder',
+                  destination: ExportDestination.originalFolder,
+                ),
+                _buildExportDestinationChip(
+                  label: _customExportDirectory == null
+                      ? 'Choose Folder'
+                      : 'Selected Folder',
+                  destination: ExportDestination.customFolder,
+                  onTap: _pickExportDirectory,
+                ),
+              ],
+            ),
+            if (_exportDestination == ExportDestination.customFolder &&
+                _customExportDirectory != null) ...[
+              const SizedBox(height: 10),
+              Text(
+                _customExportDirectory!,
+                style: const TextStyle(
+                  fontSize: 12,
+                  color: Colors.white54,
+                  height: 1.4,
+                ),
+              ),
+            ],
+            const SizedBox(height: 18),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: 0.04),
+                borderRadius: BorderRadius.circular(18),
+                border: Border.all(
+                  color: _isExporting
+                      ? const Color(0xFF63B3FF)
+                      : _lastExportSucceeded
+                      ? const Color(0xFF68E0C1)
+                      : const Color(0xFF22324D),
+                ),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Icon(
+                        _isExporting
+                            ? Icons.sync_rounded
+                            : _lastExportSucceeded
+                            ? Icons.check_circle_rounded
+                            : Icons.info_outline_rounded,
+                        size: 18,
+                        color: _isExporting
+                            ? const Color(0xFF63B3FF)
+                            : _lastExportSucceeded
+                            ? const Color(0xFF68E0C1)
+                            : Colors.white70,
+                      ),
+                      const SizedBox(width: 8),
+                      Text(
+                        _isExporting ? 'Export Status' : 'Last Export',
+                        style: const TextStyle(fontWeight: FontWeight.w700),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  Text(
+                    _exportStatusMessage,
+                    style: const TextStyle(color: Colors.white70, height: 1.4),
+                  ),
+                  if (_lastExportPath != null) ...[
+                    const SizedBox(height: 10),
+                    Text(
+                      _lastExportPath!,
+                      style: const TextStyle(
+                        fontSize: 12,
+                        color: Colors.white54,
+                        height: 1.4,
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+            const SizedBox(height: 18),
             FilledButton.icon(
-              onPressed: _showExportMessage,
-              icon: const Icon(Icons.file_download_done_rounded),
-              label: const Text('Start Placeholder Export'),
+              onPressed: _isExporting ? null : _exportVideo,
+              icon: _isExporting
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.file_download_done_rounded),
+              label: Text(_isExporting ? 'Exporting Video' : 'Export Video'),
             ),
           ],
         ),
@@ -1267,34 +1781,103 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
     );
   }
 
-  Widget _exportInfo(String label, String value) {
+  Widget _buildExportDropdown<T>({
+    required String label,
+    required T value,
+    required List<DropdownMenuItem<T>> items,
+    required ValueChanged<T?> onChanged,
+  }) {
     return Container(
-      padding: const EdgeInsets.all(14),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
       decoration: BoxDecoration(
         color: Colors.white.withValues(alpha: 0.04),
         borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: const Color(0xFF20304A)),
+        border: Border.all(color: const Color(0xFF22324D)),
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            label.toUpperCase(),
-            style: const TextStyle(
-              fontSize: 11,
-              letterSpacing: 1.1,
-              color: Colors.white54,
-            ),
+      child: DropdownButtonHideUnderline(
+        child: DropdownButton<T>(
+          value: value,
+          isExpanded: true,
+          dropdownColor: const Color(0xFF121D31),
+          borderRadius: BorderRadius.circular(16),
+          iconEnabledColor: Colors.white70,
+          style: const TextStyle(
+            color: Colors.white,
+            fontWeight: FontWeight.w700,
           ),
-          const SizedBox(height: 8),
-          Text(
-            value,
-            style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
-          ),
-        ],
+          items: items,
+          onChanged: onChanged,
+          selectedItemBuilder: (context) {
+            return items.map((item) {
+              final child = item.child;
+              return Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    label.toUpperCase(),
+                    style: const TextStyle(
+                      fontSize: 11,
+                      letterSpacing: 1.1,
+                      color: Colors.white54,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Expanded(
+                    child: Align(
+                      alignment: Alignment.centerLeft,
+                      child: FittedBox(
+                        fit: BoxFit.scaleDown,
+                        alignment: Alignment.centerLeft,
+                        child: child,
+                      ),
+                    ),
+                  ),
+                ],
+              );
+            }).toList();
+          },
+        ),
       ),
     );
   }
+
+  Widget _buildExportDestinationChip({
+    required String label,
+    required ExportDestination destination,
+    VoidCallback? onTap,
+  }) {
+    final isSelected = _exportDestination == destination;
+    return InkWell(
+      onTap: onTap ??
+          () {
+        setState(() {
+          _exportDestination = destination;
+        });
+      },
+      borderRadius: BorderRadius.circular(999),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        decoration: BoxDecoration(
+          color: isSelected
+              ? Colors.white.withValues(alpha: 0.12)
+              : Colors.white.withValues(alpha: 0.04),
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(
+            color: isSelected ? Colors.white70 : const Color(0xFF22324D),
+          ),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            fontWeight: FontWeight.w700,
+            color: isSelected ? Colors.white : Colors.white70,
+          ),
+        ),
+      ),
+    );
+  }
+
 }
 
 

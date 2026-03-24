@@ -12,6 +12,8 @@ class PresetsCard extends StatelessWidget {
     required this.onClearPreset,
     required this.presetStrength,
     required this.onPresetStrengthChanged,
+    required this.showPresetOverlay,
+    required this.onTogglePresetOverlay,
   });
 
   final List<EnhancementPreset> presets;
@@ -20,6 +22,8 @@ class PresetsCard extends StatelessWidget {
   final VoidCallback onClearPreset;
   final double presetStrength;
   final ValueChanged<double> onPresetStrengthChanged;
+  final bool showPresetOverlay;
+  final ValueChanged<bool> onTogglePresetOverlay;
 
   @override
   Widget build(BuildContext context) {
@@ -58,6 +62,22 @@ class PresetsCard extends StatelessWidget {
                 label: 'Preset Strength',
                 value: presetStrength * 100,
                 onChanged: onPresetStrengthChanged,
+              ),
+              const SizedBox(height: 10),
+              CheckboxListTile(
+                value: showPresetOverlay,
+                onChanged: (value) => onTogglePresetOverlay(value ?? false),
+                contentPadding: EdgeInsets.zero,
+                dense: true,
+                controlAffinity: ListTileControlAffinity.leading,
+                title: const Text(
+                  'Use Stylized Overlay',
+                  style: TextStyle(fontWeight: FontWeight.w600),
+                ),
+                subtitle: const Text(
+                  'Show overlay styling that is included in the preset.',
+                  style: TextStyle(color: Colors.white60),
+                ),
               ),
             ],
           ],
