@@ -251,6 +251,32 @@ class EmptyPreviewMessage extends StatelessWidget {
   }
 }
 
+class PreviewErrorMessage extends StatelessWidget {
+  const PreviewErrorMessage({
+    super.key,
+    required this.message,
+  });
+
+  final String message;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      alignment: Alignment.center,
+      padding: const EdgeInsets.all(24),
+      child: Text(
+        message,
+        textAlign: TextAlign.center,
+        style: const TextStyle(
+          color: Colors.white70,
+          height: 1.5,
+          fontSize: 16,
+        ),
+      ),
+    );
+  }
+}
+
 class PreviewStatusBadge extends StatelessWidget {
   const PreviewStatusBadge({
     super.key,

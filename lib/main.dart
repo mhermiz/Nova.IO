@@ -135,6 +135,7 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
   SceneFlavor? _sceneOverride;
   VideoPlayerController? _videoController;
   bool _isPreviewLoading = false;
+  String? _previewErrorMessage;
   final Map<String, Uint8List> _clipThumbnails = {};
   bool _showPreviewJumpButton = false;
   bool _showPreviewControls = true;
@@ -324,37 +325,82 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
 
   // Imports device videos into the queue, then prepares thumbnails and preview playback.
   Future<void> _importVideo() async {
-    final result = await FilePicker.platform.pickFiles(
-      type: FileType.video,
-      allowMultiple: true,
-    );
+    try {
+      final result = await FilePicker.platform.pickFiles(
+        type: FileType.video,
+        allowMultiple: true,
+      );
 
-    if (!mounted || result == null || result.files.isEmpty) {
-      return;
+      if (!mounted) {
+        return;
+      }
+
+      if (result == null || result.files.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('No video was selected.'),
+          ),
+        );
+        return;
+      }
+
+      final importableFiles = result.files.where((file) {
+        final path = file.path;
+        return path != null && path.isNotEmpty;
+      }).toList();
+
+      if (importableFiles.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'This device did not provide a usable file path for the selected video.',
+            ),
+          ),
+        );
+        return;
+      }
+
+      final importedClips = importableFiles.map(_buildImportedClip).toList();
+
+      setState(() {
+        _clips.addAll(importedClips);
+        _selectedClipIndex = _clips.length - importedClips.length;
+        _sceneOverride = null;
+        _previewErrorMessage = null;
+        _syncExportFileName();
+      });
+
+      _generateThumbnails(importedClips);
+      await _syncPreviewController();
+
+      if (!mounted) {
+        return;
+      }
+
+      final clipLabel = importedClips.length == 1 ? 'video' : 'videos';
+      final skippedCount = result.files.length - importableFiles.length;
+      final message = skippedCount > 0
+          ? 'Imported ${importedClips.length} $clipLabel. Skipped $skippedCount file${skippedCount == 1 ? '' : 's'} without a usable path.'
+          : 'Imported ${importedClips.length} $clipLabel into the queue.';
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(message),
+        ),
+      );
+    } catch (error, stackTrace) {
+      debugPrint('Video import failed: $error');
+      debugPrintStack(stackTrace: stackTrace);
+
+      if (!mounted) {
+        return;
+      }
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Video import failed: $error'),
+        ),
+      );
     }
-
-    final importedClips = result.files.map(_buildImportedClip).toList();
-
-    setState(() {
-      _clips.addAll(importedClips);
-      _selectedClipIndex = _clips.length - importedClips.length;
-      _sceneOverride = null;
-      _syncExportFileName();
-    });
-
-    _generateThumbnails(importedClips);
-    await _syncPreviewController();
-
-    if (!mounted) {
-      return;
-    }
-
-    final clipLabel = importedClips.length == 1 ? 'video' : 'videos';
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('Imported ${importedClips.length} $clipLabel into the queue.'),
-      ),
-    );
   }
 
   String _buildExportOutputPath(String inputPath) {
@@ -405,20 +451,50 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
   }
 
   Future<void> _pickExportDirectory() async {
-    final directoryPath = await FilePicker.platform.getDirectoryPath(
-      dialogTitle: 'Select export folder',
-      lockParentWindow: true,
-    );
+    try {
+      final directoryPath = await FilePicker.platform.getDirectoryPath(
+        dialogTitle: 'Select export folder',
+        lockParentWindow: true,
+      );
 
-    if (!mounted || directoryPath == null || directoryPath.isEmpty) {
-      return;
+      if (!mounted) {
+        return;
+      }
+
+      if (directoryPath == null || directoryPath.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('No export folder was selected.'),
+          ),
+        );
+        return;
+      }
+
+      setState(() {
+        _customExportDirectory = directoryPath;
+        _exportDestination = ExportDestination.customFolder;
+        _exportStatusMessage = 'Export destination set to $directoryPath';
+      });
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Export folder selected successfully.'),
+        ),
+      );
+    } catch (error, stackTrace) {
+      debugPrint('Export folder picker failed: $error');
+      debugPrintStack(stackTrace: stackTrace);
+
+      if (!mounted) {
+        return;
+      }
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Export folder selection failed: $error'),
+        ),
+      );
     }
-
-    setState(() {
-      _customExportDirectory = directoryPath;
-      _exportDestination = ExportDestination.customFolder;
-      _exportStatusMessage = 'Export destination set to $directoryPath';
-    });
   }
 
   Future<void> _scanExportedMedia(String outputPath) async {
@@ -605,39 +681,45 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
       return;
     }
 
-    final outputPath = _buildExportOutputPath(inputPath);
-    await Directory(File(outputPath).parent.path).create(recursive: true);
-    final videoFilter = _buildExportVideoFilter();
-    String? overlayPath;
-
-    final activeOverlayAssetPath = _activePresetOverlayAssetPath;
-    if (activeOverlayAssetPath != null) {
-      overlayPath = await _writeExportOverlayAsset(
-        activeOverlayAssetPath,
-        switch (_selectedPresetIndex) {
-          0 => 'balanced_overlay_export.png',
-          1 => 'cinematic_overlay_export.png',
-          3 => 'low_light_overlay_export.png',
-          _ => 'vivid_overlay_export.png',
-        },
-      );
-    }
-
-    final command = _buildExportCommand(
-      inputPath: inputPath,
-      outputPath: outputPath,
-      videoFilter: videoFilter,
-      overlayPath: overlayPath,
-    );
-
-    setState(() {
-      _isExporting = true;
-      _lastExportSucceeded = false;
-      _exportStatusMessage = 'Exporting ${selectedClip!.title}...';
-      _lastExportPath = outputPath;
-    });
-
     try {
+      final outputPath = _buildExportOutputPath(inputPath);
+      final outputDirectory = Directory(File(outputPath).parent.path);
+      await outputDirectory.create(recursive: true);
+
+      final videoFilter = _buildExportVideoFilter();
+      String? overlayPath;
+
+      final activeOverlayAssetPath = _activePresetOverlayAssetPath;
+      if (activeOverlayAssetPath != null) {
+        overlayPath = await _writeExportOverlayAsset(
+          activeOverlayAssetPath,
+          switch (_selectedPresetIndex) {
+            0 => 'balanced_overlay_export.png',
+            1 => 'cinematic_overlay_export.png',
+            3 => 'low_light_overlay_export.png',
+            _ => 'vivid_overlay_export.png',
+          },
+        );
+      }
+
+      final command = _buildExportCommand(
+        inputPath: inputPath,
+        outputPath: outputPath,
+        videoFilter: videoFilter,
+        overlayPath: overlayPath,
+      );
+
+      debugPrint('Export input path: $inputPath');
+      debugPrint('Export output path: $outputPath');
+      debugPrint('Export command: $command');
+
+      setState(() {
+        _isExporting = true;
+        _lastExportSucceeded = false;
+        _exportStatusMessage = 'Exporting ${selectedClip!.title}...';
+        _lastExportPath = outputPath;
+      });
+
       final session = await FFmpegKit.execute(command);
       final returnCode = await session.getReturnCode();
 
@@ -684,7 +766,10 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
           ),
         );
       }
-    } catch (_) {
+    } catch (error, stackTrace) {
+      debugPrint('Export failed before FFmpeg could finish: $error');
+      debugPrintStack(stackTrace: stackTrace);
+
       if (!mounted) {
         return;
       }
@@ -693,8 +778,8 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
         _exportStatusMessage = 'Export failed before FFmpeg could finish.';
       });
       messenger.showSnackBar(
-        const SnackBar(
-          content: Text('Export failed before FFmpeg could finish.'),
+        SnackBar(
+          content: Text('Export failed before FFmpeg could finish: $error'),
         ),
       );
     } finally {
@@ -1057,8 +1142,10 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
                   selectedPresetIndex: _selectedPresetIndex,
                   presetStrength: _presetStrength,
                 ),
-              ),
-            )
+                ),
+              )
+          : _previewErrorMessage != null
+          ? PreviewErrorMessage(message: _previewErrorMessage!)
           : selectedClip != null
           ? CustomPaint(
               painter: FramePainter(
@@ -1426,6 +1513,7 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
       if (mounted) {
         setState(() {
           _isPreviewLoading = false;
+          _previewErrorMessage = null;
         });
       }
       return;
@@ -1434,6 +1522,7 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
     if (mounted) {
       setState(() {
         _isPreviewLoading = true;
+        _previewErrorMessage = null;
       });
     }
 
@@ -1441,7 +1530,7 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
     await previousController?.dispose();
 
     try {
-      await controller.initialize();
+      await controller.initialize().timeout(const Duration(seconds: 12));
       await controller.setLooping(true);
 
       if (!mounted || _selectedClip?.filePath != filePath) {
@@ -1457,14 +1546,23 @@ class _VideoEnhancerHomePageState extends State<VideoEnhancerHomePage> {
       setState(() {
         _videoController = controller;
         _isPreviewLoading = false;
+        _previewErrorMessage = null;
         _showPreviewControls = true;
       });
-    } catch (_) {
+    } catch (error) {
       await controller.dispose();
       if (mounted) {
         setState(() {
           _isPreviewLoading = false;
+          _previewErrorMessage =
+              'Preview could not load for this clip. Try an MP4 (H.264/AAC) video.';
         });
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Preview load failed: $error'),
+          ),
+        );
       }
     }
   }
